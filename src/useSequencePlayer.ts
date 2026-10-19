@@ -94,18 +94,16 @@ export function useSequencePlayer(
         }
       }
 
-      // No active transition: hide and pause secondary layer
-      hideElement(secVideo)
-      hideElement(secImage)
-      if (secVideo && !secVideo.paused) {
-        secVideo.pause()
-      }
-
       const position = locate(items, t)
       const item = position === null ? undefined : items[position.index]
       const clip = item === undefined ? undefined : clips.get(item.clipId)
 
       if (position === null || item === undefined || clip === undefined) {
+        hideElement(secVideo)
+        hideElement(secImage)
+        if (secVideo && !secVideo.paused) {
+          secVideo.pause()
+        }
         if (items.length > 0 && t >= timelineDuration(items)) {
           const lastItem = items[items.length - 1]
           const lastClip = clips.get(lastItem.clipId)
@@ -129,6 +127,34 @@ export function useSequencePlayer(
       const targetSourceTime = item.inPoint + Math.min(position.offset, itemLength(item) - END_TOLERANCE)
       const el = renderPrimaryClip(clip, item.muted, targetSourceTime, video, image, isPlaying)
       resetElementStyles(el)
+
+      // Graceful hand-off from secondary layer to primary layer:
+      // While primary is preparing/loading the new clip, keep secondary visible on top (z-index: 2)
+      // to eliminate any momentary black blink. Once primary is ready to paint, hide secondary.
+      if (isPlaying) {
+        const primaryReady =
+          clip.mediaType === 'image'
+            ? image && image.complete
+            : video && video.src === clip.url && video.readyState >= 2 && !video.seeking
+
+        if (primaryReady) {
+          hideElement(secVideo)
+          hideElement(secImage)
+          if (secVideo && !secVideo.paused) {
+            secVideo.pause()
+          }
+        } else {
+          // Keep secondary active and unclipped on top while primary readies its first frame
+          resetElementStyles(secVideo)
+          resetElementStyles(secImage)
+        }
+      } else {
+        hideElement(secVideo)
+        hideElement(secImage)
+        if (secVideo && !secVideo.paused) {
+          secVideo.pause()
+        }
+      }
     },
     [videoRef, secondaryVideoRef, imageRef, secondaryImageRef, items, clips, transitions],
   )
@@ -228,7 +254,22 @@ function renderPrimaryClip(
       video.muted = muted
       if (video.src !== clip.url) {
         video.src = clip.url
-        video.currentTime = safeTime
+        if (safeTime > 0) {
+          const onMeta = () => {
+            try {
+              video.currentTime = safeTime
+            } catch {
+              // ignore
+            }
+          }
+          if (video.readyState >= 1) {
+            onMeta()
+          } else {
+            video.addEventListener('loadedmetadata', onMeta, { once: true })
+          }
+        } else {
+          video.currentTime = 0
+        }
         if (isPlaying) {
           video.play().catch(ignoreInterruptedPlay)
         }
