@@ -1,0 +1,183 @@
+import { useRef, useState } from 'react'
+import type { DragEvent, PointerEvent } from 'react'
+import { clampAudioStart } from '../audioTimeline.ts'
+import { AUDIO_DRAG_TYPE } from '../dnd.ts'
+import { formatDuration } from '../format.ts'
+import { itemLength } from '../timeline.ts'
+import type { AudioClip, AudioTimelineItem } from '../types.ts'
+
+/** Pointer travel, in pixels, before a press on an item becomes a drag. */
+const DRAG_THRESHOLD = 4
+
+interface AudioLaneProps {
+  items: AudioTimelineItem[]
+  clips: ReadonlyMap<string, AudioClip>
+  selectedItemId: string | null
+  pixelsPerSecond: number
+  /** Audio may not extend past the video track's own length. */
+  maxEnd: number
+  onSelectItem: (id: string | null) => void
+  onAddClip: (clipId: string, desiredStart: number) => void
+  onMoveItem: (id: string, start: number) => void
+  onTrimItem: (id: string, edge: 'in' | 'out', sourceTime: number) => void
+  onVolumeChange: (id: string, volume: number) => void
+}
+
+export function AudioLane({
+  items,
+  clips,
+  selectedItemId,
+  pixelsPerSecond: pps,
+  maxEnd,
+  onSelectItem,
+  onAddClip,
+  onMoveItem,
+  onTrimItem,
+  onVolumeChange,
+}: AudioLaneProps) {
+  const trackRef = useRef<HTMLDivElement>(null)
+  const [dropMarker, setDropMarker] = useState<number | null>(null)
+  const [dragGhost, setDragGhost] = useState<{ id: string; start: number } | null>(null)
+
+  const trackTime = (clientX: number) =>
+    (clientX - (trackRef.current?.getBoundingClientRect().left ?? 0)) / pps
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!event.dataTransfer.types.includes(AUDIO_DRAG_TYPE)) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = 'copy'
+    // The dragged clip's own length isn't readable until drop, so this preview can't
+    // show where it will actually snap; the drop itself clamps it precisely.
+    const rawTime = Math.max(0, trackTime(event.clientX))
+    const snappedTime = rawTime < 1.5 ? 0 : rawTime
+    setDropMarker(snappedTime)
+  }
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const clipId = event.dataTransfer.getData(AUDIO_DRAG_TYPE)
+    setDropMarker(null)
+    if (!clipId) return
+    const rawTime = Math.max(0, trackTime(event.clientX))
+    const snappedTime = rawTime < 1.5 ? 0 : rawTime
+    onAddClip(clipId, snappedTime)
+  }
+
+  /** Press on an item: a click selects it, a drag repositions it (collision-clamped live). */
+  const beginItemMove = (event: PointerEvent<HTMLDivElement>, item: AudioTimelineItem) => {
+    if (event.button !== 0) return
+    const element = event.currentTarget
+    element.setPointerCapture(event.pointerId)
+    const startX = event.clientX
+    const length = itemLength(item)
+    let moved = false
+    let liveStart = item.start
+
+    const onMove = (move: globalThis.PointerEvent) => {
+      const dx = move.clientX - startX
+      if (!moved && Math.abs(dx) < DRAG_THRESHOLD) return
+      moved = true
+      const rawDesired = item.start + dx / pps
+      const desired = rawDesired < 1.5 ? 0 : rawDesired
+      liveStart = clampAudioStart(items, item.id, desired, length, maxEnd) ?? item.start
+      setDragGhost({ id: item.id, start: liveStart })
+    }
+    const finish = (commit: boolean) => {
+      element.removeEventListener('pointermove', onMove)
+      element.removeEventListener('pointerup', onUp)
+      element.removeEventListener('pointercancel', onCancel)
+      setDragGhost(null)
+      if (!commit) return
+      if (!moved) onSelectItem(item.id)
+      else if (liveStart !== item.start) onMoveItem(item.id, liveStart)
+    }
+    const onUp = () => finish(true)
+    const onCancel = () => finish(false)
+    element.addEventListener('pointermove', onMove)
+    element.addEventListener('pointerup', onUp)
+    element.addEventListener('pointercancel', onCancel)
+  }
+
+  const beginTrim = (event: PointerEvent<HTMLDivElement>, item: AudioTimelineItem, edge: 'in' | 'out') => {
+    event.stopPropagation()
+    if (event.button !== 0) return
+    const element = event.currentTarget
+    element.setPointerCapture(event.pointerId)
+    const startX = event.clientX
+    const startValue = edge === 'in' ? item.inPoint : item.outPoint
+    onSelectItem(item.id)
+
+    const onMove = (move: globalThis.PointerEvent) =>
+      onTrimItem(item.id, edge, startValue + (move.clientX - startX) / pps)
+    const finish = () => {
+      element.removeEventListener('pointermove', onMove)
+      element.removeEventListener('pointerup', finish)
+      element.removeEventListener('pointercancel', finish)
+    }
+    element.addEventListener('pointermove', onMove)
+    element.addEventListener('pointerup', finish)
+    element.addEventListener('pointercancel', finish)
+  }
+
+  return (
+    <div
+      className="track audio-track"
+      ref={trackRef}
+      aria-label="Audio"
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) onSelectItem(null)
+      }}
+      onDragOver={handleDragOver}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropMarker(null)
+      }}
+      onDrop={handleDrop}
+    >
+      {items.length === 0 && (
+        <p className="empty track-hint">Drag audio here from Media, for music or voice-over.</p>
+      )}
+      {items.map((item) => {
+        const clip = clips.get(item.clipId)
+        const ghost = dragGhost?.id === item.id ? dragGhost.start : null
+        const left = (ghost ?? item.start) * pps
+        return (
+          <div
+            key={item.id}
+            className={`timeline-item audio-item${item.id === selectedItemId ? ' selected' : ''}${ghost !== null ? ' dragging' : ''}`}
+            style={{ left, width: itemLength(item) * pps }}
+            title={`${clip?.name ?? 'Missing clip'} · ${formatDuration(itemLength(item))}`}
+            onPointerDown={(event) => beginItemMove(event, item)}
+          >
+            <span className="item-label">{clip?.name}</span>
+            {item.id === selectedItemId && (
+              <input
+                type="range"
+                className="volume-slider"
+                aria-label="Volume"
+                min={0}
+                max={1}
+                step={0.01}
+                value={item.volume}
+                onPointerDown={(event) => event.stopPropagation()}
+                onChange={(event) => onVolumeChange(item.id, Number(event.target.value))}
+              />
+            )}
+            <div
+              className="trim-handle in"
+              aria-label="Trim start"
+              onPointerDown={(event) => beginTrim(event, item, 'in')}
+            />
+            <div
+              className="trim-handle out"
+              aria-label="Trim end"
+              onPointerDown={(event) => beginTrim(event, item, 'out')}
+            />
+          </div>
+        )
+      })}
+      {dropMarker !== null && <div className="drop-marker" style={{ left: dropMarker * pps }} />}
+    </div>
+  )
+}
