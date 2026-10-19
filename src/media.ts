@@ -3,18 +3,22 @@ import type { AudioClip, MediaClip } from './types.ts'
 
 const THUMBNAIL_WIDTH = 160
 
+const DEFAULT_IMAGE_DURATION = 4.0 // 4 seconds default duration on timeline
+
 /**
- * Read an imported file and classify it. A container's extension or declared MIME
- * type (such as `.webm`) can hold either video or audio, so this decides by what
- * actually decodes: a file that plays with no video frames (reported as 0x0) is
- * treated as audio, regardless of what the browser guessed from its name.
+ * Read an imported file and classify it.
+ * Supports Video, Audio, and Photos (JPEG, PNG, WebP, GIF, SVG, etc.).
  */
 export async function loadMedia(
   file: File,
 ): Promise<{ kind: 'video'; clip: MediaClip } | { kind: 'audio'; clip: AudioClip }> {
   if (file.type.startsWith('audio/')) return { kind: 'audio', clip: await loadAudioClip(file) }
+  if (file.type.startsWith('image/') || isImageFilename(file.name)) {
+    return { kind: 'video', clip: await loadImageClip(file) }
+  }
   try {
     const clip = await loadClip(file)
+    clip.mediaType = 'video'
     if (clip.width > 0 && clip.height > 0) return { kind: 'video', clip }
     // Decoded, but carried no picture: an audio file the browser guessed was video.
     URL.revokeObjectURL(clip.url)
@@ -25,6 +29,50 @@ export async function loadMedia(
     } catch {
       throw videoError
     }
+  }
+}
+
+function isImageFilename(name: string): boolean {
+  return /\.(jpe?g|png|webp|gif|svg|avif|bmp|tiff?)$/i.test(name)
+}
+
+/** Read a still photo or graphic file's metadata without uploading it anywhere. */
+export async function loadImageClip(file: File): Promise<MediaClip> {
+  const url = URL.createObjectURL(file)
+  try {
+    const img = new Image()
+    img.src = url
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve()
+      img.onerror = () => reject(new Error('This image format could not be decoded.'))
+    })
+
+    const width = img.naturalWidth || 1920
+    const height = img.naturalHeight || 1080
+
+    // Capture small thumbnail
+    const canvas = document.createElement('canvas')
+    const aspect = width > 0 ? height / width : 9 / 16
+    canvas.width = THUMBNAIL_WIDTH
+    canvas.height = Math.max(1, Math.round(THUMBNAIL_WIDTH * aspect))
+    const ctx = canvas.getContext('2d')
+    ctx?.drawImage(img, 0, 0, canvas.width, canvas.height)
+    const thumbnail = canvas.toDataURL('image/jpeg', 0.8)
+
+    return {
+      id: crypto.randomUUID(),
+      name: file.name,
+      file,
+      url,
+      duration: DEFAULT_IMAGE_DURATION,
+      width,
+      height,
+      thumbnail,
+      mediaType: 'image',
+    }
+  } catch (error) {
+    URL.revokeObjectURL(url)
+    throw error
   }
 }
 
@@ -128,11 +176,123 @@ export async function loadAudioClip(file: File): Promise<AudioClip> {
       }
     }
 
-    return { id: crypto.randomUUID(), name: file.name, file, url, duration }
+    // 4. Extract real amplitude/pitch peaks for waveform visualization
+    let peaks: number[] | undefined
+    try {
+      peaks = await extractAudioPeaks(file, 400)
+    } catch {
+      peaks = generateFallbackPeaks(400, file.name)
+    }
+
+    return { id: crypto.randomUUID(), name: file.name, file, url, duration, peaks }
   } catch (error) {
     URL.revokeObjectURL(url)
     throw error
   }
+}
+
+/**
+ * Extract normalized audio peaks from an audio file using Web Audio API.
+ * Returns an array of normalized values [0.06 .. 1.0] representing amplitude/dynamics across the clip.
+ * Gracefully falls back to deterministic pseudo-peaks if decode is unavailable or fails.
+ */
+export async function extractAudioPeaks(file: File, samplesCount = 400): Promise<number[]> {
+  if (typeof window === 'undefined') {
+    return generateFallbackPeaks(samplesCount, file.name)
+  }
+  const AudioCtx =
+    window.AudioContext ??
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+  if (!AudioCtx) {
+    return generateFallbackPeaks(samplesCount, file.name)
+  }
+
+  try {
+    const ctx = new AudioCtx()
+    try {
+      const arrayBuffer = await file.arrayBuffer()
+      // Copy arrayBuffer in case decodeAudioData detaches the underlying ArrayBuffer
+      const bufferCopy = arrayBuffer.slice(0)
+      const audioBuffer = await ctx.decodeAudioData(bufferCopy)
+      const channelCount = audioBuffer.numberOfChannels
+      if (channelCount === 0 || audioBuffer.length === 0) {
+        return generateFallbackPeaks(samplesCount, file.name)
+      }
+
+      // Mix stereo / surround channels down to mono for balanced amplitude envelope
+      const channels: Float32Array[] = []
+      for (let c = 0; c < Math.min(2, channelCount); c++) {
+        channels.push(audioBuffer.getChannelData(c))
+      }
+
+      const totalFrames = audioBuffer.length
+      const step = Math.max(1, Math.floor(totalFrames / samplesCount))
+      const peaks: number[] = new Array(samplesCount)
+      let maxPeak = 0.0001
+
+      for (let i = 0; i < samplesCount; i++) {
+        const start = i * step
+        const end = Math.min(start + step, totalFrames)
+        let sumSquare = 0
+        let localMax = 0
+
+        for (let j = start; j < end; j++) {
+          let sample = 0
+          for (let c = 0; c < channels.length; c++) {
+            sample += channels[c][j]
+          }
+          sample /= channels.length
+          const abs = Math.abs(sample)
+          if (abs > localMax) localMax = abs
+          sumSquare += abs * abs
+        }
+
+        const count = Math.max(1, end - start)
+        const rms = Math.sqrt(sumSquare / count)
+        // Combine peak and RMS for a natural musical waveform
+        const combined = 0.65 * localMax + 0.35 * (rms * 1.8)
+        peaks[i] = combined
+        if (combined > maxPeak) maxPeak = combined
+      }
+
+      // Normalize to range [0.06, 1.0]
+      for (let i = 0; i < samplesCount; i++) {
+        const normalized = peaks[i] / maxPeak
+        peaks[i] = Math.min(1, Math.max(0.06, Number(normalized.toFixed(3))))
+      }
+      return peaks
+    } finally {
+      try {
+        await ctx.close()
+      } catch {
+        // ignore close error
+      }
+    }
+  } catch (err) {
+    console.warn('AudioContext decoding failed, falling back to simulated peaks:', err)
+    return generateFallbackPeaks(samplesCount, file.name)
+  }
+}
+
+/**
+ * Deterministic fallback peak generator for environments without Web Audio API (e.g. tests)
+ * or corrupted audio streams. Produces realistic dynamic musical profiles.
+ */
+export function generateFallbackPeaks(samplesCount = 400, seedStr = 'audio'): number[] {
+  let hash = 0
+  for (let i = 0; i < seedStr.length; i++) {
+    hash = (hash << 5) - hash + seedStr.charCodeAt(i)
+    hash |= 0
+  }
+  const peaks: number[] = new Array(samplesCount)
+  for (let i = 0; i < samplesCount; i++) {
+    const t = i / samplesCount
+    const macroEnvelope = Math.sin(t * Math.PI) * 0.4 + 0.3 + 0.2 * Math.sin(t * 14)
+    const beat = Math.abs(Math.sin(t * 70)) * 0.25
+    const noise = Math.abs(Math.sin((hash + i) * 9973)) * 0.2
+    peaks[i] = Math.min(1, Math.max(0.06, Number((macroEnvelope + beat + noise).toFixed(3))))
+  }
+  return peaks
 }
 
 /** Some recordings (such as browser-made WebM files) omit their length; seeking far

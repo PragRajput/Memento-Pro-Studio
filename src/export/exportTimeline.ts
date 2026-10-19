@@ -59,11 +59,16 @@ export interface ExportOptions {
 
 interface OpenVideoClip {
   clip: MediaClip
-  input: Input
-  video: InputVideoTrack
+  input?: Input
+  video?: InputVideoTrack
   /** Null when the clip has no audio this browser can decode; it then contributes silence. */
   audio: InputAudioTrack | null
+  image?: ImageBitmap
 }
+
+export type RenderableVisual =
+  | { kind: 'video'; sample: VideoSample }
+  | { kind: 'image'; bitmap: ImageBitmap; width: number; height: number }
 
 interface OpenAudioClip {
   clip: AudioClip
@@ -95,7 +100,10 @@ export async function exportTimeline(
   let output: Output<Mp4OutputFormat, BufferTarget> | null = null
 
   const disposeAll = () => {
-    for (const { input } of opened.values()) input.dispose()
+    for (const open of opened.values()) {
+      open.input?.dispose()
+      open.image?.close()
+    }
     for (const { input } of openedAudio.values()) input.dispose()
   }
   const onAbort = () => {
@@ -128,7 +136,11 @@ export async function exportTimeline(
     })
     if (videoCodec === null) throw new Error('This browser cannot encode MP4 video.')
     const needsAudio =
-      items.some((item) => !item.muted && opened.get(item.clipId)!.audio !== null) ||
+      items.some((item) => {
+        if (item.muted) return false
+        const open = opened.get(item.clipId)
+        return open !== undefined && open.audio !== null
+      }) ||
       audioItems.some((item) => openedAudio.get(item.clipId)!.audio !== null)
     const audioCodec = needsAudio
       ? await getFirstEncodableAudioCodec(['aac', 'opus'], {
@@ -173,31 +185,48 @@ export async function exportTimeline(
     if (transitions.length === 0) {
       for (const group of plan.items) {
         const open = opened.get(items[group.itemIndex].clipId)!
-        const timestamps = group.sourceTimes.map((time) => time + FRAME_EPSILON)
         let frame = group.firstFrame
-        for await (const sample of new VideoSampleSink(open.video).samplesAtTimestamps(timestamps)) {
-          context.fillStyle = '#000'
-          context.fillRect(0, 0, size.width, size.height)
-          if (sample !== null) {
-            try {
-              sample.drawWithFit(context, { fit: 'contain' })
-            } finally {
-              sample.close()
-            }
+        if (open.image) {
+          for (let i = 0; i < group.sourceTimes.length; i++) {
+            context.fillStyle = '#000'
+            context.fillRect(0, 0, size.width, size.height)
+            drawImageWithFit(context, open.image, size)
+            drawTextOverlays(context, textItems, frame / EXPORT_FPS, size)
+            signal?.throwIfAborted()
+            await videoSource.add(frame / EXPORT_FPS, 1 / EXPORT_FPS)
+            frame += 1
+            framesDone += 1
+            report('Rendering video', 0.1 + 0.88 * (framesDone / plan.frameCount))
           }
-          drawTextOverlays(context, textItems, frame / EXPORT_FPS, size)
-          signal?.throwIfAborted()
-          await videoSource.add(frame / EXPORT_FPS, 1 / EXPORT_FPS)
-          frame += 1
-          framesDone += 1
-          report('Rendering video', 0.1 + 0.88 * (framesDone / plan.frameCount))
+        } else if (open.video) {
+          const timestamps = group.sourceTimes.map((time) => time + FRAME_EPSILON)
+          for await (const sample of new VideoSampleSink(open.video).samplesAtTimestamps(timestamps)) {
+            context.fillStyle = '#000'
+            context.fillRect(0, 0, size.width, size.height)
+            if (sample !== null) {
+              try {
+                sample.drawWithFit(context, { fit: 'contain' })
+              } finally {
+                sample.close()
+              }
+            }
+            drawTextOverlays(context, textItems, frame / EXPORT_FPS, size)
+            signal?.throwIfAborted()
+            await videoSource.add(frame / EXPORT_FPS, 1 / EXPORT_FPS)
+            frame += 1
+            framesDone += 1
+            report('Rendering video', 0.1 + 0.88 * (framesDone / plan.frameCount))
+          }
         }
       }
     } else {
-      // Transition-aware rendering: collect monotonic timestamps needed from each clip
+      // Transition-aware rendering: collect monotonic timestamps needed from each video clip
       const clipTimestamps = new Map<string, number[]>()
       for (const item of items) {
-        if (!clipTimestamps.has(item.clipId)) clipTimestamps.set(item.clipId, [])
+        const open = opened.get(item.clipId)
+        if (open?.video && !clipTimestamps.has(item.clipId)) {
+          clipTimestamps.set(item.clipId, [])
+        }
       }
 
       for (let frame = 0; frame < plan.frameCount; frame++) {
@@ -221,7 +250,7 @@ export async function exportTimeline(
       const iterators = new Map<string, AsyncIterator<VideoSample | null>>()
       for (const [clipId, times] of clipTimestamps.entries()) {
         const open = opened.get(clipId)
-        if (open && times.length > 0) {
+        if (open?.video && times.length > 0) {
           const sink = new VideoSampleSink(open.video)
           iterators.set(clipId, sink.samplesAtTimestamps(times)[Symbol.asyncIterator]())
         }
@@ -235,28 +264,23 @@ export async function exportTimeline(
         const active = locateTransition(items, transitions, t)
 
         if (active !== null) {
-          const iterA = iterators.get(active.itemA.clipId)
-          const iterB = iterators.get(active.itemB.clipId)
-          const sampleA = iterA ? (await iterA.next()).value ?? null : null
-          const sampleB = iterB ? (await iterB.next()).value ?? null : null
+          const visualA = await getVisualForClip(active.itemA.clipId, iterators, opened)
+          const visualB = await getVisualForClip(active.itemB.clipId, iterators, opened)
           try {
-            drawTransitionFrame(context, size, sampleA, sampleB, active.transition.type, active.progress)
+            drawTransitionFrame(context, size, visualA, visualB, active.transition.type, active.progress)
           } finally {
-            sampleA?.close()
-            sampleB?.close()
+            closeVisual(visualA)
+            closeVisual(visualB)
           }
         } else {
           const pos = locate(items, t)
           if (pos !== null) {
             const item = items[pos.index]
-            const iter = iterators.get(item.clipId)
-            const sample = iter ? (await iter.next()).value ?? null : null
-            if (sample !== null) {
-              try {
-                sample.drawWithFit(context, { fit: 'contain' })
-              } finally {
-                sample.close()
-              }
+            const visual = await getVisualForClip(item.clipId, iterators, opened)
+            try {
+              drawVisual(context, visual, size)
+            } finally {
+              closeVisual(visual)
             }
           }
         }
@@ -293,6 +317,10 @@ export async function exportTimeline(
 }
 
 async function openVideoClip(clip: MediaClip, notes: string[]): Promise<OpenVideoClip> {
+  if (clip.mediaType === 'image') {
+    const image = await createImageBitmap(clip.file)
+    return { clip, audio: null, image }
+  }
   const input = new Input({ source: new BlobSource(clip.file), formats: ALL_FORMATS })
   try {
     const video = await input.getPrimaryVideoTrack()
@@ -519,49 +547,268 @@ function audioCodecName(codec: AudioCodec): string {
   return AUDIO_CODEC_NAMES[codec] ?? codec
 }
 
+function drawImageWithFit(
+  context: CanvasRenderingContext2D,
+  image: ImageBitmap,
+  targetSize: Size,
+) {
+  const { width: tw, height: th } = targetSize
+  const { width: sw, height: sh } = image
+  if (sw === 0 || sh === 0) return
+  const scale = Math.min(tw / sw, th / sh)
+  const dw = sw * scale
+  const dh = sh * scale
+  const dx = (tw - dw) / 2
+  const dy = (th - dh) / 2
+  context.drawImage(image, dx, dy, dw, dh)
+}
+
+function drawVisual(
+  context: CanvasRenderingContext2D,
+  visual: RenderableVisual | null,
+  size: Size,
+) {
+  if (!visual) return
+  if (visual.kind === 'video') {
+    visual.sample.drawWithFit(context, { fit: 'contain' })
+  } else {
+    drawImageWithFit(context, visual.bitmap, size)
+  }
+}
+
+function closeVisual(visual: RenderableVisual | null) {
+  if (visual?.kind === 'video') {
+    visual.sample.close()
+  }
+}
+
+async function getVisualForClip(
+  clipId: string,
+  iterators: Map<string, AsyncIterator<VideoSample | null>>,
+  opened: ReadonlyMap<string, OpenVideoClip>,
+): Promise<RenderableVisual | null> {
+  const open = opened.get(clipId)
+  if (!open) return null
+  if (open.image) {
+    return {
+      kind: 'image',
+      bitmap: open.image,
+      width: open.clip.width ?? open.image.width,
+      height: open.clip.height ?? open.image.height,
+    }
+  }
+  const iter = iterators.get(clipId)
+  if (!iter) return null
+  const sample = (await iter.next()).value ?? null
+  if (sample === null) return null
+  return { kind: 'video', sample }
+}
+
 function drawTransitionFrame(
   context: CanvasRenderingContext2D,
   size: Size,
-  sampleA: VideoSample | null,
-  sampleB: VideoSample | null,
+  visualA: RenderableVisual | null,
+  visualB: RenderableVisual | null,
   type: TransitionType,
   progress: number,
 ) {
+  const p = clamp(progress, 0, 1)
+
   if (type === 'crossfade') {
-    if (sampleA !== null) {
+    if (visualA !== null) {
       context.globalAlpha = 1.0
-      sampleA.drawWithFit(context, { fit: 'contain' })
+      drawVisual(context, visualA, size)
     }
-    if (sampleB !== null) {
-      context.globalAlpha = clamp(progress, 0, 1)
-      sampleB.drawWithFit(context, { fit: 'contain' })
+    if (visualB !== null) {
+      context.globalAlpha = p
+      drawVisual(context, visualB, size)
       context.globalAlpha = 1.0
     }
   } else if (type === 'fade-black') {
-    if (progress < 0.5) {
-      if (sampleA !== null) {
-        context.globalAlpha = clamp(1 - progress * 2, 0, 1)
-        sampleA.drawWithFit(context, { fit: 'contain' })
+    if (p < 0.5) {
+      if (visualA !== null) {
+        context.globalAlpha = clamp(1 - p * 2, 0, 1)
+        drawVisual(context, visualA, size)
         context.globalAlpha = 1.0
       }
     } else {
-      if (sampleB !== null) {
-        context.globalAlpha = clamp((progress - 0.5) * 2, 0, 1)
-        sampleB.drawWithFit(context, { fit: 'contain' })
+      if (visualB !== null) {
+        context.globalAlpha = clamp((p - 0.5) * 2, 0, 1)
+        drawVisual(context, visualB, size)
         context.globalAlpha = 1.0
       }
     }
-  } else if (type === 'wipe-left') {
-    if (sampleA !== null) {
+  } else if (type === 'fade-white') {
+    if (p < 0.5) {
+      if (visualA !== null) {
+        drawVisual(context, visualA, size)
+      }
+      context.fillStyle = '#ffffff'
+      context.globalAlpha = p * 2
+      context.fillRect(0, 0, size.width, size.height)
       context.globalAlpha = 1.0
-      sampleA.drawWithFit(context, { fit: 'contain' })
+    } else {
+      if (visualB !== null) {
+        drawVisual(context, visualB, size)
+      }
+      context.fillStyle = '#ffffff'
+      context.globalAlpha = (1 - p) * 2
+      context.fillRect(0, 0, size.width, size.height)
+      context.globalAlpha = 1.0
     }
-    if (sampleB !== null) {
+  } else if (type === 'wipe-left') {
+    if (visualA !== null) {
+      drawVisual(context, visualA, size)
+    }
+    if (visualB !== null) {
       context.save()
       context.beginPath()
-      context.rect(0, 0, size.width * clamp(progress, 0, 1), size.height)
+      context.rect(0, 0, size.width * p, size.height)
       context.clip()
-      sampleB.drawWithFit(context, { fit: 'contain' })
+      drawVisual(context, visualB, size)
+      context.restore()
+    }
+  } else if (type === 'wipe-right') {
+    if (visualA !== null) {
+      drawVisual(context, visualA, size)
+    }
+    if (visualB !== null) {
+      context.save()
+      context.beginPath()
+      context.rect(size.width * (1 - p), 0, size.width * p, size.height)
+      context.clip()
+      drawVisual(context, visualB, size)
+      context.restore()
+    }
+  } else if (type === 'wipe-up') {
+    if (visualA !== null) {
+      drawVisual(context, visualA, size)
+    }
+    if (visualB !== null) {
+      context.save()
+      context.beginPath()
+      context.rect(0, 0, size.width, size.height * p)
+      context.clip()
+      drawVisual(context, visualB, size)
+      context.restore()
+    }
+  } else if (type === 'wipe-down') {
+    if (visualA !== null) {
+      drawVisual(context, visualA, size)
+    }
+    if (visualB !== null) {
+      context.save()
+      context.beginPath()
+      context.rect(0, size.height * (1 - p), size.width, size.height * p)
+      context.clip()
+      drawVisual(context, visualB, size)
+      context.restore()
+    }
+  } else if (type === 'slide-left') {
+    if (visualA !== null) {
+      context.save()
+      context.translate(-size.width * p, 0)
+      drawVisual(context, visualA, size)
+      context.restore()
+    }
+    if (visualB !== null) {
+      context.save()
+      context.translate(size.width * (1 - p), 0)
+      drawVisual(context, visualB, size)
+      context.restore()
+    }
+  } else if (type === 'slide-right') {
+    if (visualA !== null) {
+      context.save()
+      context.translate(size.width * p, 0)
+      drawVisual(context, visualA, size)
+      context.restore()
+    }
+    if (visualB !== null) {
+      context.save()
+      context.translate(-size.width * (1 - p), 0)
+      drawVisual(context, visualB, size)
+      context.restore()
+    }
+  } else if (type === 'zoom-in') {
+    const cx = size.width / 2
+    const cy = size.height / 2
+    if (visualA !== null) {
+      context.save()
+      context.globalAlpha = clamp(1 - p * 0.4, 0, 1)
+      const scaleA = 1 + p * 0.35
+      context.translate(cx, cy)
+      context.scale(scaleA, scaleA)
+      context.translate(-cx, -cy)
+      drawVisual(context, visualA, size)
+      context.restore()
+    }
+    if (visualB !== null) {
+      context.save()
+      context.globalAlpha = clamp(p, 0, 1)
+      const scaleB = 1 + (1 - p) * 0.15
+      context.translate(cx, cy)
+      context.scale(scaleB, scaleB)
+      context.translate(-cx, -cy)
+      drawVisual(context, visualB, size)
+      context.restore()
+    }
+  } else if (type === 'zoom-out') {
+    const cx = size.width / 2
+    const cy = size.height / 2
+    if (visualA !== null) {
+      context.save()
+      context.globalAlpha = clamp(1 - p, 0, 1)
+      const scaleA = 1 - p * 0.15
+      context.translate(cx, cy)
+      context.scale(scaleA, scaleA)
+      context.translate(-cx, -cy)
+      drawVisual(context, visualA, size)
+      context.restore()
+    }
+    if (visualB !== null) {
+      context.save()
+      context.globalAlpha = clamp(p, 0, 1)
+      const scaleB = 1.35 - p * 0.35
+      context.translate(cx, cy)
+      context.scale(scaleB, scaleB)
+      context.translate(-cx, -cy)
+      drawVisual(context, visualB, size)
+      context.restore()
+    }
+  } else if (type === 'iris-circle') {
+    if (visualA !== null) {
+      drawVisual(context, visualA, size)
+    }
+    if (visualB !== null) {
+      const cx = size.width / 2
+      const cy = size.height / 2
+      const maxRadius = Math.hypot(size.width, size.height) * 0.75
+      context.save()
+      context.beginPath()
+      context.arc(cx, cy, maxRadius * p, 0, Math.PI * 2)
+      context.clip()
+      drawVisual(context, visualB, size)
+      context.restore()
+    }
+  } else if (type === 'blur-dissolve') {
+    const maxBlur = 16
+    if (visualA !== null) {
+      context.save()
+      context.globalAlpha = clamp(1 - p, 0, 1)
+      if (p > 0.01 && 'filter' in context) {
+        context.filter = `blur(${(p * maxBlur).toFixed(1)}px)`
+      }
+      drawVisual(context, visualA, size)
+      context.restore()
+    }
+    if (visualB !== null) {
+      context.save()
+      context.globalAlpha = clamp(p, 0, 1)
+      if (1 - p > 0.01 && 'filter' in context) {
+        context.filter = `blur(${((1 - p) * maxBlur).toFixed(1)}px)`
+      }
+      drawVisual(context, visualB, size)
       context.restore()
     }
   }

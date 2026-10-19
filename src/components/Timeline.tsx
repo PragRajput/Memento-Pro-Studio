@@ -417,7 +417,10 @@ export function Timeline({
                   title={`${clip?.name ?? 'Missing clip'} · ${formatDuration(itemLength(item))}`}
                   onPointerDown={(event) => beginItemDrag(event, index)}
                 >
-                  <span className="item-label">{clip?.name}</span>
+                  <span className="item-label">
+                    <span className="video-badge-mini" aria-hidden="true">🎬</span>
+                    {clip?.name}
+                  </span>
                   <button
                     type="button"
                     className={`mute-toggle${item.muted ? ' muted' : ''}`}

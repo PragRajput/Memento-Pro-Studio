@@ -1,13 +1,76 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { DragEvent, PointerEvent } from 'react'
 import { clampAudioStart } from '../audioTimeline.ts'
 import { AUDIO_DRAG_TYPE } from '../dnd.ts'
 import { formatDuration } from '../format.ts'
+import { generateFallbackPeaks } from '../media.ts'
 import { itemLength } from '../timeline.ts'
 import type { AudioClip, AudioTimelineItem } from '../types.ts'
 
 /** Pointer travel, in pixels, before a press on an item becomes a drag. */
 const DRAG_THRESHOLD = 4
+
+interface AudioWaveformProps {
+  clip?: AudioClip
+  item: AudioTimelineItem
+  pixelsPerSecond: number
+}
+
+const AUDIO_LANE_HEIGHT = 54
+const AUDIO_LANE_CENTER_Y = AUDIO_LANE_HEIGHT / 2
+
+function AudioWaveform({ clip, item, pixelsPerSecond: pps }: AudioWaveformProps) {
+  const width = Math.max(2, itemLength(item) * pps)
+
+  const pathD = useMemo(() => {
+    const peaks =
+      clip?.peaks && clip.peaks.length > 0
+        ? clip.peaks
+        : generateFallbackPeaks(200, clip?.name ?? 'audio')
+
+    const barStep = 3 // 3px per bar
+    const barCount = Math.floor(width / barStep)
+    if (barCount <= 0) return ''
+
+    const clipDuration = clip?.duration && clip.duration > 0 ? clip.duration : (item.outPoint || 1)
+    // Scale max amplitude subtly with item volume (keep minimum baseline so the waveform remains visible)
+    const volScale = Math.max(0.25, Math.min(1, item.volume))
+    const maxAmplitude = 21 * volScale
+
+    let d = ''
+    for (let i = 0; i < barCount; i++) {
+      const x = i * barStep + 1.5
+      const sourceTime = item.inPoint + x / pps
+      const clipRatio = Math.max(0, Math.min(1, sourceTime / clipDuration))
+      const peakIdx = Math.min(peaks.length - 1, Math.max(0, Math.floor(clipRatio * peaks.length)))
+      const peakVal = peaks[peakIdx] ?? 0.1
+
+      const barHalf = Math.max(1.5, peakVal * maxAmplitude)
+      const y1 = (AUDIO_LANE_CENTER_Y - barHalf).toFixed(1)
+      const y2 = (AUDIO_LANE_CENTER_Y + barHalf).toFixed(1)
+      d += `M${x.toFixed(1)} ${y1}V${y2} `
+    }
+    return d
+  }, [clip, item.inPoint, item.outPoint, item.volume, width, pps])
+
+  return (
+    <svg
+      className="audio-waveform-svg"
+      viewBox={`0 0 ${width} ${AUDIO_LANE_HEIGHT}`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <line
+        x1={0}
+        y1={AUDIO_LANE_CENTER_Y}
+        x2={width}
+        y2={AUDIO_LANE_CENTER_Y}
+        className="audio-waveform-centerline"
+      />
+      <path d={pathD} className="audio-waveform-path" />
+    </svg>
+  )
+}
 
 interface AudioLaneProps {
   items: AudioTimelineItem[]
@@ -177,7 +240,11 @@ export function AudioLane({
             title={`${clip?.name ?? 'Missing clip'} · Vol: ${volPercent}% · ${formatDuration(itemLength(item))}`}
             onPointerDown={(event) => beginItemMove(event, item)}
           >
-            <span className="item-label">{clip?.name}</span>
+            <AudioWaveform clip={clip} item={item} pixelsPerSecond={pps} />
+            <span className="item-label">
+              <span className="audio-badge-mini" aria-hidden="true">♪</span>
+              {clip?.name}
+            </span>
             <div className="audio-item-controls" onPointerDown={(event) => event.stopPropagation()}>
               <button
                 type="button"

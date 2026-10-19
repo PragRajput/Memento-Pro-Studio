@@ -13,6 +13,8 @@ interface PreviewProps {
   hasVideo: boolean
   timelineVideoRef: RefObject<HTMLVideoElement | null>
   secondaryVideoRef?: RefObject<HTMLVideoElement | null>
+  timelineImageRef?: RefObject<HTMLImageElement | null>
+  secondaryImageRef?: RefObject<HTMLImageElement | null>
   timelineAudioRef: RefObject<HTMLAudioElement | null>
   textItems: TextOverlay[]
   selectedTextId: string | null
@@ -44,6 +46,8 @@ export function Preview({
   hasVideo,
   timelineVideoRef,
   secondaryVideoRef,
+  timelineImageRef,
+  secondaryImageRef,
   timelineAudioRef,
   textItems,
   selectedTextId,
@@ -139,7 +143,11 @@ export function Preview({
         {/* Canvas Stage */}
         <div className="preview-canvas-wrapper">
           {videoClip && (
-            <video key={videoClip.id} src={videoClip.url} controls className="preview-source-video" />
+            videoClip.mediaType === 'image' ? (
+              <img key={videoClip.id} src={videoClip.url} alt={videoClip.name} className="preview-source-video preview-source-image" />
+            ) : (
+              <video key={videoClip.id} src={videoClip.url} controls className="preview-source-video" />
+            )
           )}
 
           {audioClip && (
@@ -161,6 +169,18 @@ export function Preview({
                   ref={secondaryVideoRef}
                   className="preview-video secondary"
                   style={{ display: 'none' }}
+                />
+                <img
+                  ref={timelineImageRef}
+                  className="preview-image primary"
+                  style={{ display: 'none' }}
+                  alt=""
+                />
+                <img
+                  ref={secondaryImageRef}
+                  className="preview-image secondary"
+                  style={{ display: 'none' }}
+                  alt=""
                 />
               </>
             ) : (

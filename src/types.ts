@@ -6,7 +6,7 @@ export interface SourceRange {
   outPoint: number
 }
 
-/** A video file imported into the media panel. */
+/** A video or photo file imported into the media panel. */
 export interface MediaClip {
   id: string
   name: string
@@ -14,12 +14,14 @@ export interface MediaClip {
   file: File
   /** Object URL for the original file; revoke it when the clip is removed. */
   url: string
-  /** Length in seconds; not finite when the browser cannot determine it. */
+  /** Length in seconds; not finite when the browser cannot determine it. Photos default to 4s. */
   duration: number
   width: number
   height: number
-  /** Small JPEG data URL of an early frame. */
+  /** Small JPEG data URL of an early frame or photo preview. */
   thumbnail: string
+  /** Distinguish between video and still photo clips. */
+  mediaType?: 'video' | 'image'
 }
 
 /** An audio file imported into the media panel. */
@@ -32,9 +34,11 @@ export interface AudioClip {
   url: string
   /** Length in seconds; not finite when the browser cannot determine it. */
   duration: number
+  /** Normalized amplitude/pitch peaks along the audio track for waveform visualization. */
+  peaks?: number[]
 }
 
-/** One piece of a video clip placed on the video track. Items play back to back. */
+/** One piece of a video or photo clip placed on the primary visual track. Items play back to back. */
 export interface TimelineItem extends SourceRange {
   id: string
   clipId: string
@@ -42,7 +46,20 @@ export interface TimelineItem extends SourceRange {
   muted: boolean
 }
 
-export type TransitionType = 'crossfade' | 'fade-black' | 'wipe-left'
+export type TransitionType =
+  | 'crossfade'
+  | 'fade-black'
+  | 'fade-white'
+  | 'wipe-left'
+  | 'wipe-right'
+  | 'wipe-up'
+  | 'wipe-down'
+  | 'slide-left'
+  | 'slide-right'
+  | 'zoom-in'
+  | 'zoom-out'
+  | 'iris-circle'
+  | 'blur-dissolve'
 
 /** A transition between two adjacent video clips on the timeline. */
 export interface Transition {

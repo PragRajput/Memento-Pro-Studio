@@ -61,6 +61,8 @@ function App() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
   const timelineVideoRef = useRef<HTMLVideoElement>(null)
   const timelineSecondaryVideoRef = useRef<HTMLVideoElement>(null)
+  const timelineImageRef = useRef<HTMLImageElement>(null)
+  const timelineSecondaryImageRef = useRef<HTMLImageElement>(null)
   const timelineAudioRef = useRef<HTMLAudioElement>(null)
 
   const clipsById = useMemo(() => new Map(clips.map((clip) => [clip.id, clip])), [clips])
@@ -84,6 +86,8 @@ function App() {
     clipsById,
     validTransitions,
     totalDuration,
+    timelineImageRef,
+    timelineSecondaryImageRef,
   )
 
   useAudioLanePlayback(timelineAudioRef, audioItems, audioClipsById, player.time, player.playing)
@@ -547,15 +551,32 @@ function App() {
     <div className="app">
       <header className="app-header">
         <div className="app-brand">
-          <div className="brand-logo-box">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="23 7 16 12 23 17 23 7" fill="currentColor" opacity="0.8" />
-              <rect x="1" y="5" width="15" height="14" rx="3" ry="3" />
+          <div className="brand-logo-box" title="Mini Video Editor Studio">
+            <svg width="20" height="20" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="brand-grad" x1="2" y1="2" x2="30" y2="30" gradientUnits="userSpaceOnUse">
+                  <stop stopColor="#38bdf8" />
+                  <stop offset="0.5" stopColor="#6366f1" />
+                  <stop offset="1" stopColor="#a855f7" />
+                </linearGradient>
+              </defs>
+              <path d="M7 8.5H12L10 12.5H5L7 8.5Z" fill="#38bdf8" />
+              <path d="M14.5 8.5H19.5L17.5 12.5H12.5L14.5 8.5Z" fill="#818cf8" />
+              <path d="M22 8.5H27L25 12.5H20L22 8.5Z" fill="#c084fc" />
+              <path
+                d="M11 15.5C11 14.65 11.95 14.15 12.65 14.6L22.2 19.1C22.9 19.45 22.9 20.55 22.2 20.9L12.65 25.4C11.95 25.85 11 25.35 11 24.5V15.5Z"
+                fill="url(#brand-grad)"
+              />
+              <path
+                d="M12.5 17L18.8 20L12.5 23V17Z"
+                fill="#ffffff"
+                fillOpacity="0.85"
+              />
             </svg>
           </div>
           <div className="brand-meta">
             <h1>Mini Video Editor</h1>
-            <span className="brand-badge">STUDIO</span>
+            <span className="brand-badge">PRO STUDIO</span>
           </div>
         </div>
 
@@ -675,6 +696,8 @@ function App() {
         }}
         onCloseAudioInspector={() => setSelectedAudioItemId(null)}
         secondaryVideoRef={timelineSecondaryVideoRef}
+        timelineImageRef={timelineImageRef}
+        secondaryImageRef={timelineSecondaryImageRef}
         selectedTransition={selectedTransition}
         selectedTransitionItemA={selectedTransitionItemA}
         selectedTransitionItemB={selectedTransitionItemB}

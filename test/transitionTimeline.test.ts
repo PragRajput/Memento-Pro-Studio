@@ -76,4 +76,29 @@ describe('Transition timeline logic', () => {
     assert.strictEqual(cleanedReversed[0].fromItemId, 'item-1')
     assert.strictEqual(cleanedReversed[0].toItemId, 'item-3')
   })
+
+  it('supports all 13 modern transition types', () => {
+    const allTypes = [
+      'crossfade',
+      'fade-black',
+      'fade-white',
+      'wipe-left',
+      'wipe-right',
+      'wipe-up',
+      'wipe-down',
+      'slide-left',
+      'slide-right',
+      'zoom-in',
+      'zoom-out',
+      'iris-circle',
+      'blur-dissolve',
+    ] as const
+
+    assert.strictEqual(allTypes.length, 13)
+    for (const type of allTypes) {
+      const t = createTransition('item-1', 'item-2', type, 1.2)
+      assert.strictEqual(t.type, type)
+      assert.strictEqual(t.duration, 1.2)
+    }
+  })
 })

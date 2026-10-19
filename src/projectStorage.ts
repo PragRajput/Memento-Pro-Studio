@@ -13,6 +13,7 @@ export interface SerializedMediaClip {
   height: number
   thumbnail: string
   blob: Blob
+  mediaType?: 'video' | 'image'
 }
 
 export interface SerializedAudioClip {
@@ -20,6 +21,7 @@ export interface SerializedAudioClip {
   name: string
   duration: number
   blob: Blob
+  peaks?: number[]
 }
 
 export interface ProjectData {
@@ -73,12 +75,14 @@ export async function persistProject(
       height: c.height,
       thumbnail: c.thumbnail,
       blob: c.file,
+      mediaType: c.mediaType,
     }))
     const serializedAudioClips: SerializedAudioClip[] = audioClips.map((c) => ({
       id: c.id,
       name: c.name,
       duration: c.duration,
       blob: c.file,
+      peaks: c.peaks,
     }))
 
     const project: ProjectData = {
@@ -142,6 +146,7 @@ export async function restoreProject(): Promise<{
         thumbnail: sc.thumbnail,
         file,
         url,
+        mediaType: sc.mediaType,
       }
     })
 
@@ -154,6 +159,7 @@ export async function restoreProject(): Promise<{
         duration: sc.duration,
         file,
         url,
+        peaks: sc.peaks,
       }
     })
 

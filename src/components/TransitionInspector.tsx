@@ -14,7 +14,17 @@ interface TransitionInspectorProps {
 const TRANSITION_TYPES: { type: TransitionType; label: string; icon: string }[] = [
   { type: 'crossfade', label: 'Crossfade', icon: '⧉' },
   { type: 'fade-black', label: 'Dip to Black', icon: '◐' },
-  { type: 'wipe-left', label: 'Wipe Left', icon: '◨' },
+  { type: 'fade-white', label: 'Flash White', icon: '◑' },
+  { type: 'blur-dissolve', label: 'Blur Dissolve', icon: '🌫' },
+  { type: 'wipe-left', label: 'Wipe Left', icon: '◀' },
+  { type: 'wipe-right', label: 'Wipe Right', icon: '▶' },
+  { type: 'wipe-up', label: 'Wipe Up', icon: '▲' },
+  { type: 'wipe-down', label: 'Wipe Down', icon: '▼' },
+  { type: 'slide-left', label: 'Push Left', icon: '⏪' },
+  { type: 'slide-right', label: 'Push Right', icon: '⏩' },
+  { type: 'zoom-in', label: 'Zoom In', icon: '🔍' },
+  { type: 'zoom-out', label: 'Zoom Out', icon: '🔎' },
+  { type: 'iris-circle', label: 'Circle Iris', icon: '⭕' },
 ]
 
 const DURATION_PRESETS = [0.5, 0.8, 1.0, 1.5, 2.0]

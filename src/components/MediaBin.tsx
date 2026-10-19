@@ -22,7 +22,7 @@ interface MediaBinProps {
   onAddAudioToTimeline: (id: string) => void
 }
 
-type MediaFilter = 'all' | 'video' | 'audio'
+type MediaFilter = 'all' | 'video' | 'photo' | 'audio'
 
 export function MediaBin({
   clips,
@@ -61,7 +61,8 @@ export function MediaBin({
   }
 
   const totalClips = clips.length + audioClips.length
-  const showVideo = filter === 'all' || filter === 'video'
+  const videoClipsOnly = clips.filter((c) => c.mediaType !== 'image')
+  const photoClipsOnly = clips.filter((c) => c.mediaType === 'image')
   const showAudio = filter === 'all' || filter === 'audio'
 
   return (
@@ -81,7 +82,7 @@ export function MediaBin({
           type="button"
           className="import-btn"
           onClick={() => inputRef.current?.click()}
-          title="Import video or audio files from your computer"
+          title="Import video, photo, or audio files from your computer"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="5" x2="12" y2="19" />
@@ -92,7 +93,7 @@ export function MediaBin({
         <input
           ref={inputRef}
           type="file"
-          accept="video/*,audio/*"
+          accept="video/*,audio/*,image/*"
           multiple
           hidden
           onChange={(event) => {
@@ -118,7 +119,14 @@ export function MediaBin({
             className={`filter-tab${filter === 'video' ? ' active' : ''}`}
             onClick={() => setFilter('video')}
           >
-            Video <span className="tab-count">{clips.length}</span>
+            Video <span className="tab-count">{videoClipsOnly.length}</span>
+          </button>
+          <button
+            type="button"
+            className={`filter-tab${filter === 'photo' ? ' active' : ''}`}
+            onClick={() => setFilter('photo')}
+          >
+            Photos <span className="tab-count">{photoClipsOnly.length}</span>
           </button>
           <button
             type="button"
@@ -156,18 +164,25 @@ export function MediaBin({
           <p className="dropzone-title">Drop media here</p>
           <p className="dropzone-subtitle">or click to browse your files</p>
           <div className="dropzone-tags">
-            <span>MP4</span>
+            <span>MP4 / MOV</span>
+            <span>PNG / JPG</span>
             <span>WebM</span>
-            <span>MP3</span>
-            <span>WAV</span>
+            <span>MP3 / WAV</span>
           </div>
         </div>
       ) : (
         <ul className="clip-list">
-          {showVideo &&
-            clips.map((clip) => {
+          {clips
+            .filter(
+              (c) =>
+                filter === 'all' ||
+                (filter === 'video' && c.mediaType !== 'image') ||
+                (filter === 'photo' && c.mediaType === 'image'),
+            )
+            .map((clip) => {
               const placeable = Number.isFinite(clip.duration)
               const selected = selection?.kind === 'video' && selection.id === clip.id
+              const isImage = clip.mediaType === 'image'
               return (
                 <li
                   key={clip.id}
@@ -186,8 +201,10 @@ export function MediaBin({
                   >
                     <div className="thumb-wrapper">
                       <img src={clip.thumbnail} alt="" />
-                      <span className="thumb-duration">{formatDuration(clip.duration)}</span>
-                      <span className="media-type-tag video-tag">VIDEO</span>
+                      <span className="thumb-duration">{isImage ? 'PHOTO' : formatDuration(clip.duration)}</span>
+                      <span className={`media-type-tag ${isImage ? 'photo-tag' : 'video-tag'}`}>
+                        {isImage ? 'PHOTO' : 'VIDEO'}
+                      </span>
                     </div>
                     <div className="clip-info">
                       <span className="clip-name" title={clip.name}>
