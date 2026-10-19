@@ -1,5 +1,5 @@
 import { locate, timelineDuration } from '../timeline.ts'
-import type { TimelineItem } from '../types.ts'
+import type { AspectRatio, TimelineItem } from '../types.ts'
 
 /** Largest export: 1080p in either orientation. */
 const MAX_LONG_SIDE = 1920
@@ -21,6 +21,26 @@ export function outputSize({ width, height }: Size): Size {
     MAX_SHORT_SIDE / Math.min(width, height),
   )
   return { width: evenFloor(width * scale), height: evenFloor(height * scale) }
+}
+
+/** Export dimensions for project aspect ratio presets. */
+export function outputSizeForAspectRatio(aspectRatio?: AspectRatio, sourceSize?: Size): Size {
+  if (!aspectRatio) {
+    return sourceSize ? outputSize(sourceSize) : { width: 1920, height: 1080 }
+  }
+  switch (aspectRatio) {
+    case '9:16':
+      return { width: 1080, height: 1920 }
+    case '1:1':
+      return { width: 1080, height: 1080 }
+    case '4:5':
+      return { width: 1080, height: 1350 }
+    case '21:9':
+      return { width: 1920, height: 822 }
+    case '16:9':
+    default:
+      return { width: 1920, height: 1080 }
+  }
 }
 
 /** Output frames drawn from one timeline item, in order. */
@@ -52,7 +72,7 @@ export function planFrames(items: readonly TimelineItem[], fps: number): FramePl
       group = { itemIndex: position.index, firstFrame: frame, sourceTimes: [] }
       groups.push(group)
     }
-    group.sourceTimes.push(item.inPoint + position.offset)
+    group.sourceTimes.push(item.inPoint + position.offset * (item.speed ?? 1))
   }
   return { frameCount, duration: frameCount / fps, items: groups }
 }

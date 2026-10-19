@@ -3,8 +3,9 @@ import type { SourceRange, TimelineItem } from './types.ts'
 /** Shortest piece, in seconds, that a trim or split may leave. */
 export const MIN_ITEM_LENGTH = 0.1
 
-export function itemLength(item: SourceRange): number {
-  return item.outPoint - item.inPoint
+export function itemLength(item: SourceRange & { speed?: number }): number {
+  const speed = item.speed ?? 1
+  return (item.outPoint - item.inPoint) / (speed > 0 ? speed : 1)
 }
 
 export function timelineDuration(items: readonly TimelineItem[]): number {
@@ -90,8 +91,13 @@ export function splitAt(
   if (position.offset < MIN_ITEM_LENGTH || itemLength(item) - position.offset < MIN_ITEM_LENGTH) {
     return null
   }
-  const cut = item.inPoint + position.offset
-  const right = { ...createItem(item.clipId, cut, item.outPoint), muted: item.muted }
+  const cut = item.inPoint + position.offset * (item.speed ?? 1)
+  const right: TimelineItem = {
+    ...item,
+    id: crypto.randomUUID(),
+    inPoint: cut,
+    outPoint: item.outPoint,
+  }
   const next = [...items]
   next.splice(position.index, 1, { ...item, outPoint: cut }, right)
   return { items: next, rightId: right.id }

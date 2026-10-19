@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
-import { clamp, itemLength, itemStarts, locate, timelineDuration } from './timeline.ts'
+import { getClipTransform, getCssFilter } from './filters.ts'
+import { clamp, itemStarts, locate, timelineDuration } from './timeline.ts'
 import { locateTransition } from './transitionTimeline.ts'
 import type { MediaClip, TimelineItem, Transition, TransitionType } from './types.ts'
 
@@ -11,12 +12,12 @@ function hideElement(el: HTMLElement | null) {
   if (el) el.style.display = 'none'
 }
 
-function resetElementStyles(el: HTMLElement | null) {
+function resetElementStyles(el: HTMLElement | null, item?: TimelineItem | null) {
   if (!el) return
   el.style.opacity = '1'
   el.style.clipPath = 'none'
-  el.style.transform = 'none'
-  el.style.filter = 'none'
+  el.style.transform = getClipTransform(item)
+  el.style.filter = getCssFilter(item?.filter, item?.filterIntensity)
 }
 
 /**
@@ -84,11 +85,11 @@ export function useSequencePlayer(
           const isAActive = isPlaying && t < cutTime
           const isBActive = isPlaying && t >= cutTime
 
-          const elA = renderPrimaryClip(clipA, itemA.muted, sourceTimeA, video, image, isAActive)
-          const elB = renderSecondaryClip(clipB, itemB.muted, sourceTimeB, secVideo, secImage, isPlaying, isBActive)
+          const elA = renderPrimaryClip(clipA, itemA, sourceTimeA, video, image, isAActive)
+          const elB = renderSecondaryClip(clipB, itemB, sourceTimeB, secVideo, secImage, isPlaying, isBActive)
 
           if (elA && elB) {
-            applyTransitionStyle(elA, elB, transition.type, progress)
+            applyTransitionStyle(elA, elB, transition.type, progress, itemA, itemB)
           }
           return
         }
@@ -110,23 +111,23 @@ export function useSequencePlayer(
           if (lastClip !== undefined) {
             const el = renderPrimaryClip(
               lastClip,
-              lastItem.muted,
+              lastItem,
               Math.max(lastItem.inPoint, lastItem.outPoint - END_TOLERANCE),
               video,
               image,
               false,
             )
-            resetElementStyles(el)
+            resetElementStyles(el, lastItem)
             return
           }
         }
-        renderPrimaryClip(undefined, false, 0, video, image, false)
+        renderPrimaryClip(undefined, undefined, 0, video, image, false)
         return
       }
 
-      const targetSourceTime = item.inPoint + Math.min(position.offset, itemLength(item) - END_TOLERANCE)
-      const el = renderPrimaryClip(clip, item.muted, targetSourceTime, video, image, isPlaying)
-      resetElementStyles(el)
+      const targetSourceTime = item.inPoint + Math.min(position.offset * (item.speed ?? 1), item.outPoint - item.inPoint - END_TOLERANCE)
+      const el = renderPrimaryClip(clip, item, targetSourceTime, video, image, isPlaying)
+      resetElementStyles(el, item)
 
       // Graceful hand-off from secondary layer to primary layer:
       // While primary is preparing/loading the new clip, keep secondary visible on top (z-index: 2)
@@ -215,7 +216,7 @@ export function useSequencePlayer(
 
 function renderPrimaryClip(
   clip: MediaClip | undefined,
-  muted: boolean,
+  item: TimelineItem | undefined,
   targetSourceTime: number,
   video: HTMLVideoElement | null,
   image: HTMLImageElement | null,
@@ -244,6 +245,7 @@ function renderPrimaryClip(
     if (image) {
       if (image.src !== clip.url) image.src = clip.url
       image.style.display = 'block'
+      image.style.objectFit = item?.fitMode ?? 'contain'
       return image
     }
     return null
@@ -251,7 +253,9 @@ function renderPrimaryClip(
     if (image) image.style.display = 'none'
     if (video) {
       video.style.display = 'block'
-      video.muted = muted
+      video.muted = item?.muted ?? false
+      video.playbackRate = item?.speed ?? 1
+      video.style.objectFit = item?.fitMode ?? 'contain'
       if (video.src !== clip.url) {
         video.src = clip.url
         if (safeTime > 0) {
@@ -298,7 +302,7 @@ function renderPrimaryClip(
 
 function renderSecondaryClip(
   clip: MediaClip | undefined,
-  muted: boolean,
+  item: TimelineItem | undefined,
   targetSourceTime: number,
   secVideo: HTMLVideoElement | null,
   secImage: HTMLImageElement | null,
@@ -326,6 +330,7 @@ function renderSecondaryClip(
     if (secImage) {
       if (secImage.src !== clip.url) secImage.src = clip.url
       secImage.style.display = 'block'
+      secImage.style.objectFit = item?.fitMode ?? 'contain'
       return secImage
     }
     return null
@@ -333,7 +338,9 @@ function renderSecondaryClip(
     if (secImage) secImage.style.display = 'none'
     if (secVideo) {
       secVideo.style.display = 'block'
-      secVideo.muted = muted
+      secVideo.muted = item?.muted ?? false
+      secVideo.playbackRate = item?.speed ?? 1
+      secVideo.style.objectFit = item?.fitMode ?? 'contain'
       if (secVideo.src !== clip.url) {
         secVideo.src = clip.url
         secVideo.currentTime = safeTime
@@ -368,14 +375,33 @@ export function applyTransitionStyle(
   secondary: HTMLElement,
   type: TransitionType,
   progress: number,
+  itemA?: TimelineItem | null,
+  itemB?: TimelineItem | null,
 ) {
   const p = clamp(progress, 0, 1)
 
+  const baseTransA = getClipTransform(itemA)
+  const baseTransB = getClipTransform(itemB)
+  const baseFiltA = getCssFilter(itemA?.filter, itemA?.filterIntensity)
+  const baseFiltB = getCssFilter(itemB?.filter, itemB?.filterIntensity)
+
+  const combineTrans = (base: string, extra: string) => {
+    if (!base || base === 'none') return extra
+    if (!extra || extra === 'none') return base
+    return `${base} ${extra}`
+  }
+
+  const combineFilt = (base: string, extra: string) => {
+    if (!base || base === 'none') return extra
+    if (!extra || extra === 'none') return base
+    return `${base} ${extra}`
+  }
+
   // Reset transforms and filters
-  primary.style.transform = 'none'
-  secondary.style.transform = 'none'
-  primary.style.filter = 'none'
-  secondary.style.filter = 'none'
+  primary.style.transform = baseTransA
+  secondary.style.transform = baseTransB
+  primary.style.filter = baseFiltA
+  secondary.style.filter = baseFiltB
   primary.style.clipPath = 'none'
   secondary.style.clipPath = 'none'
 
@@ -393,12 +419,12 @@ export function applyTransitionStyle(
   } else if (type === 'fade-white') {
     if (p < 0.5) {
       primary.style.opacity = '1'
-      primary.style.filter = `brightness(${1 + p * 4})`
+      primary.style.filter = combineFilt(baseFiltA, `brightness(${1 + p * 4})`)
       secondary.style.opacity = '0'
     } else {
       primary.style.opacity = '0'
       secondary.style.opacity = '1'
-      secondary.style.filter = `brightness(${1 + (1 - p) * 4})`
+      secondary.style.filter = combineFilt(baseFiltB, `brightness(${1 + (1 - p) * 4})`)
     }
   } else if (type === 'wipe-left') {
     primary.style.opacity = '1'
@@ -419,31 +445,31 @@ export function applyTransitionStyle(
   } else if (type === 'slide-left') {
     primary.style.opacity = '1'
     secondary.style.opacity = '1'
-    primary.style.transform = `translateX(-${p * 100}%)`
-    secondary.style.transform = `translateX(${(1 - p) * 100}%)`
+    primary.style.transform = combineTrans(baseTransA, `translateX(-${p * 100}%)`)
+    secondary.style.transform = combineTrans(baseTransB, `translateX(${(1 - p) * 100}%)`)
   } else if (type === 'slide-right') {
     primary.style.opacity = '1'
     secondary.style.opacity = '1'
-    primary.style.transform = `translateX(${p * 100}%)`
-    secondary.style.transform = `translateX(-${(1 - p) * 100}%)`
+    primary.style.transform = combineTrans(baseTransA, `translateX(${p * 100}%)`)
+    secondary.style.transform = combineTrans(baseTransB, `translateX(-${(1 - p) * 100}%)`)
   } else if (type === 'zoom-in') {
-    primary.style.transform = `scale(${1 + p * 0.35})`
+    primary.style.transform = combineTrans(baseTransA, `scale(${1 + p * 0.35})`)
     primary.style.opacity = `${1 - p * 0.4}`
-    secondary.style.transform = `scale(${1 + (1 - p) * 0.15})`
+    secondary.style.transform = combineTrans(baseTransB, `scale(${1 + (1 - p) * 0.15})`)
     secondary.style.opacity = `${p}`
   } else if (type === 'zoom-out') {
-    primary.style.transform = `scale(${1 - p * 0.15})`
+    primary.style.transform = combineTrans(baseTransA, `scale(${1 - p * 0.15})`)
     primary.style.opacity = `${1 - p}`
-    secondary.style.transform = `scale(${1.35 - p * 0.35})`
+    secondary.style.transform = combineTrans(baseTransB, `scale(${1.35 - p * 0.35})`)
     secondary.style.opacity = `${p}`
   } else if (type === 'iris-circle') {
     primary.style.opacity = '1'
     secondary.style.opacity = '1'
     secondary.style.clipPath = `circle(${p * 75}% at 50% 50%)`
   } else if (type === 'blur-dissolve') {
-    primary.style.filter = `blur(${p * 16}px)`
+    primary.style.filter = combineFilt(baseFiltA, `blur(${p * 16}px)`)
     primary.style.opacity = `${1 - p}`
-    secondary.style.filter = `blur(${(1 - p) * 16}px)`
+    secondary.style.filter = combineFilt(baseFiltB, `blur(${(1 - p) * 16}px)`)
     secondary.style.opacity = `${p}`
   }
 }

@@ -137,19 +137,80 @@ export function Timeline({
   const contentWidth = Math.max(viewportWidth, (duration + TRAILING_SPACE) * pps)
   const playheadX = time * pps
 
-  // Keep the playhead in view during playback.
+  const isProgrammaticScroll = useRef(false)
+  const userScrolledAway = useRef(false)
+  const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Keep playhead in view during playback unless user has scrolled away.
   useEffect(() => {
     const scroller = scrollRef.current
     if (!playing || scroller === null) return
-    if (playheadX > scroller.scrollLeft + scroller.clientWidth - 40 || playheadX < scroller.scrollLeft) {
-      scroller.scrollLeft = Math.max(0, playheadX - 40)
+
+    // If user has intentionally scrolled away from the playhead, do not force follow
+    if (userScrolledAway.current) return
+
+    const visibleStart = scroller.scrollLeft
+    const visibleEnd = scroller.scrollLeft + scroller.clientWidth
+
+    // If playhead crosses past the visible right boundary (with 50px margin) or falls behind visible left
+    if (playheadX > visibleEnd - 50 || playheadX < visibleStart) {
+      isProgrammaticScroll.current = true
+      scroller.scrollLeft = Math.max(0, playheadX - 50)
+      if (scrollTimeoutRef.current !== null) clearTimeout(scrollTimeoutRef.current)
+      scrollTimeoutRef.current = setTimeout(() => {
+        isProgrammaticScroll.current = false
+      }, 60)
     }
   }, [playing, playheadX])
+
+  // Detect user horizontal scrolling to suspend or resume auto-following.
+  const handleScroll = () => {
+    if (isProgrammaticScroll.current) return
+    const scroller = scrollRef.current
+    if (!scroller) return
+
+    const visibleStart = scroller.scrollLeft
+    const visibleEnd = scroller.scrollLeft + scroller.clientWidth
+
+    // Check if playhead (pointer) is currently visible inside the screen window (with 10px buffer)
+    const inView = playheadX >= visibleStart - 10 && playheadX <= visibleEnd + 10
+
+    if (!inView) {
+      // User scrolled playhead out of view -> do not force follow!
+      userScrolledAway.current = true
+    } else {
+      // User scrolled back such that playhead is visible again -> resume follow!
+      userScrolledAway.current = false
+    }
+  }
+
+  // If playback restarts while playhead is visible, ensure auto-follow is active
+  useEffect(() => {
+    if (playing) {
+      const scroller = scrollRef.current
+      if (scroller) {
+        const inView =
+          playheadX >= scroller.scrollLeft - 10 &&
+          playheadX <= scroller.scrollLeft + scroller.clientWidth + 10
+        if (inView) {
+          userScrolledAway.current = false
+        }
+      }
+    }
+  }, [playing, playheadX])
+
+  // Clean up timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (scrollTimeoutRef.current !== null) clearTimeout(scrollTimeoutRef.current)
+    }
+  }, [])
 
   const trackTime = (clientX: number) =>
     (clientX - (trackRef.current?.getBoundingClientRect().left ?? 0)) / pps
 
   const seekFromPointer = (event: PointerEvent<HTMLDivElement>) => {
+    userScrolledAway.current = false
     const left = event.currentTarget.getBoundingClientRect().left
     onSeek(clamp((event.clientX - left) / pps, 0, duration))
   }
@@ -263,7 +324,10 @@ export function Timeline({
           <button
             type="button"
             className="transport-btn jump-btn"
-            onClick={() => onSeek(0)}
+            onClick={() => {
+              userScrolledAway.current = false
+              onSeek(0)
+            }}
             disabled={duration <= 0}
             title="Jump to Start (Home)"
           >
@@ -352,7 +416,7 @@ export function Timeline({
         </div>
       </header>
 
-      <div className="timeline-scroll" ref={scrollRef}>
+      <div className="timeline-scroll" ref={scrollRef} onScroll={handleScroll}>
         <div
           className="timeline-content"
           style={{ width: contentWidth }}
@@ -364,6 +428,7 @@ export function Timeline({
             pixelsPerSecond={pps}
             onPointerDown={(event) => {
               event.currentTarget.setPointerCapture(event.pointerId)
+              userScrolledAway.current = false
               seekFromPointer(event)
             }}
             onPointerMove={(event) => {

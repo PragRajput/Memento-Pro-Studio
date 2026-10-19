@@ -87,8 +87,8 @@ export function locateTransition(
       const offsetInA = time - starts[i]
       const offsetInB = time - starts[i + 1]
 
-      const sourceTimeA = clamp(itemA.inPoint + offsetInA, itemA.inPoint, itemA.outPoint)
-      const sourceTimeB = clamp(itemB.inPoint + offsetInB, itemB.inPoint, itemB.outPoint)
+      const sourceTimeA = clamp(itemA.inPoint + offsetInA * (itemA.speed ?? 1), itemA.inPoint, itemA.outPoint)
+      const sourceTimeB = clamp(itemB.inPoint + offsetInB * (itemB.speed ?? 1), itemB.inPoint, itemB.outPoint)
 
       return {
         transition,

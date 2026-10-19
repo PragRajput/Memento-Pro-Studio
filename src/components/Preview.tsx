@@ -1,9 +1,10 @@
 import type { RefObject } from 'react'
 import type { MediaSelection } from './MediaBin.tsx'
 import { AudioInspector } from './AudioInspector.tsx'
+import { ClipInspector } from './ClipInspector.tsx'
 import { TextInspector } from './TextInspector.tsx'
 import { TransitionInspector } from './TransitionInspector.tsx'
-import type { AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition } from '../types.ts'
+import type { AspectRatio, AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition } from '../types.ts'
 
 interface PreviewProps {
   selection: MediaSelection
@@ -11,6 +12,7 @@ interface PreviewProps {
   audioClips: ReadonlyMap<string, AudioClip>
   timelineEmpty: boolean
   hasVideo: boolean
+  aspectRatio?: AspectRatio
   timelineVideoRef: RefObject<HTMLVideoElement | null>
   secondaryVideoRef?: RefObject<HTMLVideoElement | null>
   timelineImageRef?: RefObject<HTMLImageElement | null>
@@ -22,10 +24,16 @@ interface PreviewProps {
   onSelectText: (id: string | null) => void
   onUpdateText: (updated: TextOverlay) => void
   onDeleteText: (id: string) => void
+  selectedTimelineItem?: TimelineItem | null
+  onUpdateTimelineItem?: (updated: TimelineItem) => void
+  onDeleteTimelineItem?: (id: string) => void
+  onCloseTimelineInspector?: () => void
   selectedAudioItem?: AudioTimelineItem | null
   selectedAudioClipName?: string
   audioTrackCount?: number
+  onUpdateAudioItem?: (updated: AudioTimelineItem) => void
   onAudioVolumeChange?: (id: string, volume: number) => void
+  onAudioFadeChange?: (id: string, fadeIn: number, fadeOut: number) => void
   onMoveAudioToTrack?: (id: string, trackIndex: number) => void
   onDeleteAudioItem?: (id: string) => void
   onCloseAudioInspector?: () => void
@@ -44,6 +52,7 @@ export function Preview({
   audioClips,
   timelineEmpty,
   hasVideo,
+  aspectRatio = '16:9',
   timelineVideoRef,
   secondaryVideoRef,
   timelineImageRef,
@@ -55,10 +64,16 @@ export function Preview({
   onSelectText,
   onUpdateText,
   onDeleteText,
+  selectedTimelineItem,
+  onUpdateTimelineItem,
+  onDeleteTimelineItem,
+  onCloseTimelineInspector,
   selectedAudioItem,
   selectedAudioClipName,
   audioTrackCount = 2,
+  onUpdateAudioItem,
   onAudioVolumeChange,
+  onAudioFadeChange,
   onMoveAudioToTrack,
   onDeleteAudioItem,
   onCloseAudioInspector,
@@ -77,6 +92,7 @@ export function Preview({
 
   const hasInspector = Boolean(
     selectedText ||
+    (selectedTimelineItem && onUpdateTimelineItem && onDeleteTimelineItem && onCloseTimelineInspector) ||
     (selectedAudioItem && onAudioVolumeChange && onMoveAudioToTrack && onDeleteAudioItem && onCloseAudioInspector) ||
     (selectedTransition && onUpdateTransition && onDeleteTransition && onCloseTransitionInspector)
   )
@@ -161,7 +177,11 @@ export function Preview({
           )}
 
           {/* Timeline preview stage */}
-          <div className="preview-stage" hidden={!showingTimeline || timelineEmpty}>
+          <div
+            className="preview-stage"
+            hidden={!showingTimeline || timelineEmpty}
+            style={{ aspectRatio: (aspectRatio ?? '16:9').replace(':', ' / ') }}
+          >
             {hasVideo ? (
               <>
                 <video ref={timelineVideoRef} className="preview-video primary" />
@@ -254,6 +274,16 @@ export function Preview({
       {/* Docked Inspector Sidebar (Does not obscure video canvas!) */}
       {hasInspector && (
         <aside className="preview-inspector-dock">
+          {selectedTimelineItem && onUpdateTimelineItem && onDeleteTimelineItem && onCloseTimelineInspector && (
+            <ClipInspector
+              item={selectedTimelineItem}
+              clip={videoClips.get(selectedTimelineItem.clipId)}
+              onChange={onUpdateTimelineItem}
+              onDelete={onDeleteTimelineItem}
+              onClose={onCloseTimelineInspector}
+            />
+          )}
+
           {selectedText && (
             <TextInspector
               item={selectedText}
@@ -268,7 +298,9 @@ export function Preview({
               item={selectedAudioItem}
               clipName={selectedAudioClipName ?? 'Audio clip'}
               trackCount={audioTrackCount}
+              onChange={onUpdateAudioItem}
               onVolumeChange={onAudioVolumeChange}
+              onFadeChange={onAudioFadeChange}
               onMoveToTrack={onMoveAudioToTrack}
               onDelete={onDeleteAudioItem}
               onClose={onCloseAudioInspector}

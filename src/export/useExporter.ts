@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition } from '../types.ts'
+import type { AspectRatio, AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition } from '../types.ts'
 import { exportTimeline } from './exportTimeline.ts'
 import type { ExportResult } from './exportTimeline.ts'
 
@@ -19,6 +19,7 @@ export function useExporter(
   audioClips: ReadonlyMap<string, AudioClip>,
   textItems: readonly TextOverlay[] = [],
   transitions: readonly Transition[] = [],
+  aspectRatio: AspectRatio = '16:9',
 ) {
   const [state, setState] = useState<ExportState>({ status: 'idle' })
   const controllerRef = useRef<AbortController | null>(null)
@@ -38,7 +39,7 @@ export function useExporter(
     controllerRef.current = controller
     setState({ status: 'running', stage: 'Preparing', fraction: 0 })
     try {
-      const result = await exportTimeline(items, clips, audioItems, audioClips, textItems, transitions, {
+      const result = await exportTimeline(items, clips, audioItems, audioClips, textItems, transitions, aspectRatio, {
         signal: controller.signal,
         onProgress: (stage, fraction) => {
           if (!controller.signal.aborted) setState({ status: 'running', stage, fraction })
@@ -58,7 +59,7 @@ export function useExporter(
     } finally {
       if (controllerRef.current === controller) controllerRef.current = null
     }
-  }, [items, clips, audioItems, audioClips, textItems, transitions])
+  }, [items, clips, audioItems, audioClips, textItems, transitions, aspectRatio])
 
 
   const cancel = useCallback(() => controllerRef.current?.abort(), [])

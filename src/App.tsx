@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   audioItemEnd,
   clampAudioStart,
@@ -15,7 +15,7 @@ import type { MediaSelection } from './components/MediaBin.tsx'
 import { MediaBin } from './components/MediaBin.tsx'
 import { Preview } from './components/Preview.tsx'
 import { Timeline } from './components/Timeline.tsx'
-import { outputSize } from './export/plan.ts'
+import { outputSizeForAspectRatio } from './export/plan.ts'
 import { useExporter } from './export/useExporter.ts'
 import { formatTimecode } from './format.ts'
 import { extractAudioPeaks, loadMedia } from './media.ts'
@@ -32,8 +32,10 @@ import {
   createTransition,
   maxTransitionDuration,
 } from './transitionTimeline.ts'
-import type { AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition, TransitionType } from './types.ts'
+import type { AspectRatio, AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition, TransitionType } from './types.ts'
 import { useAudioLanePlayback } from './useAudioLanePlayback.ts'
+import { useHistory } from './useHistory.ts'
+import type { HistorySnapshot } from './useHistory.ts'
 import { useSequencePlayer } from './useSequencePlayer.ts'
 import './App.css'
 
@@ -48,6 +50,7 @@ function App() {
   const [audioItems, setAudioItems] = useState<AudioTimelineItem[]>([])
   const [audioTrackCount, setAudioTrackCount] = useState(2)
   const [textItems, setTextItems] = useState<TextOverlay[]>([])
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>('16:9')
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
   const [selectedAudioItemId, setSelectedAudioItemId] = useState<string | null>(null)
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null)
@@ -78,6 +81,27 @@ function App() {
     selectedTransitionId !== null && validTransitions.some((t) => t.id === selectedTransitionId)
       ? selectedTransitionId
       : null
+
+  const currentSnapshot = useMemo<HistorySnapshot>(
+    () => ({
+      items,
+      audioItems,
+      textItems,
+      transitions,
+      aspectRatio,
+    }),
+    [items, audioItems, textItems, transitions, aspectRatio],
+  )
+
+  const applySnapshot = useCallback((snapshot: HistorySnapshot) => {
+    setItems(snapshot.items)
+    setAudioItems(snapshot.audioItems)
+    setTextItems(snapshot.textItems)
+    setTransitions(snapshot.transitions)
+    setAspectRatio(snapshot.aspectRatio)
+  }, [])
+
+  const { canUndo, canRedo, undo, redo } = useHistory(currentSnapshot, applySnapshot, storageLoaded)
 
   const player = useSequencePlayer(
     timelineVideoRef,
@@ -118,7 +142,7 @@ function App() {
   const videoSplitResult = splitAt(items, player.time)
   const audioSplitResult = splitAudioAt(audioItems, player.time, validSelectedAudioItemId)
   const textSplitResult = splitTextAtTime(textItems, player.time)
-  const exporter = useExporter(items, clipsById, audioItems, audioClipsById, textItems, validTransitions)
+  const exporter = useExporter(items, clipsById, audioItems, audioClipsById, textItems, validTransitions, aspectRatio)
 
   // 1. Rehydrate project from IndexedDB on initial mount
   useEffect(() => {
@@ -133,6 +157,9 @@ function App() {
         setTextItems(restored.textItems)
         setTransitions(restored.transitions)
         setAudioTrackCount(restored.audioTrackCount)
+        if (restored.aspectRatio) {
+          setAspectRatio(restored.aspectRatio)
+        }
         if (restored.items.length > 0 || restored.audioItems.length > 0) {
           setShowingClip(false)
         }
@@ -190,6 +217,7 @@ function App() {
         textItems,
         validTransitions,
         effectiveTrackCount,
+        aspectRatio,
       )
       setSaveStatus('saved')
     }, 800)
@@ -203,6 +231,7 @@ function App() {
     textItems,
     validTransitions,
     effectiveTrackCount,
+    aspectRatio,
   ])
 
   // 3. Clear current project and reset to clean state
@@ -218,6 +247,7 @@ function App() {
     setTextItems([])
     setTransitions([])
     setAudioTrackCount(2)
+    setAspectRatio('16:9')
     setSelection(null)
     setSelectedItemId(null)
     setSelectedAudioItemId(null)
@@ -485,8 +515,26 @@ function App() {
     setAudioItems((current) => current.map((item) => (item.id === id ? { ...item, volume } : item)))
   }
 
+  const setAudioFade = (id: string, fadeIn: number, fadeOut: number) => {
+    setAudioItems((current) => current.map((item) => (item.id === id ? { ...item, fadeIn, fadeOut } : item)))
+  }
+
+  const updateAudioItem = (updated: AudioTimelineItem) => {
+    setAudioItems((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+  }
+
   const toggleMuted = (id: string) => {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, muted: !item.muted } : item)))
+  }
+
+  const updateTimelineItem = (updated: TimelineItem) => {
+    setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+  }
+
+  const deleteTimelineItem = (id: string) => {
+    setItems((current) => current.filter((item) => item.id !== id))
+    if (selectedItemId === id) setSelectedItemId(null)
+    showTimeline()
   }
 
   const split = () => {
@@ -576,8 +624,8 @@ function App() {
   })
 
   const firstClip = items.length > 0 ? clipsById.get(items[0].clipId) : undefined
-  const exportSize = firstClip ? outputSize(firstClip) : null
-  const exportLabel = exportSize ? `${exportSize.width}×${exportSize.height} · 30 fps` : ''
+  const exportSize = firstClip ? outputSizeForAspectRatio(aspectRatio, firstClip) : null
+  const exportLabel = exportSize ? `${exportSize.width}×${exportSize.height} (${aspectRatio}) · 30 fps` : ''
 
   return (
     <div className="app">
@@ -635,6 +683,55 @@ function App() {
         </div>
 
         <div className="header-actions">
+          {/* Undo & Redo History Controls */}
+          <div className="header-history-group">
+            <button
+              type="button"
+              className="btn-header-history"
+              onClick={undo}
+              disabled={!canUndo}
+              title="Undo (Cmd+Z / Ctrl+Z)"
+              aria-label="Undo"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 7v6h6" />
+                <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+              </svg>
+              <span>Undo</span>
+            </button>
+            <button
+              type="button"
+              className="btn-header-history"
+              onClick={redo}
+              disabled={!canRedo}
+              title="Redo (Cmd+Shift+Z / Ctrl+Y)"
+              aria-label="Redo"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 7v6h-6" />
+                <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
+              </svg>
+              <span>Redo</span>
+            </button>
+          </div>
+
+          {/* Project Aspect Ratio Selector */}
+          <div className="header-aspect-ratio-group" title="Project Canvas Aspect Ratio">
+            <span className="aspect-ratio-icon" aria-hidden="true">📐</span>
+            <select
+              className="aspect-ratio-select"
+              value={aspectRatio}
+              onChange={(e) => setAspectRatio(e.target.value as AspectRatio)}
+              aria-label="Project Aspect Ratio"
+            >
+              <option value="16:9">16:9 Landscape</option>
+              <option value="9:16">9:16 Vertical (Reels/Shorts)</option>
+              <option value="1:1">1:1 Square</option>
+              <option value="4:5">4:5 Portrait</option>
+              <option value="21:9">21:9 Cinema</option>
+            </select>
+          </div>
+
           <button
             type="button"
             className="header-shortcuts-btn"
@@ -692,6 +789,7 @@ function App() {
         audioClips={audioClipsById}
         timelineEmpty={items.length === 0 && audioItems.length === 0 && textItems.length === 0}
         hasVideo={items.length > 0}
+        aspectRatio={aspectRatio}
         timelineVideoRef={timelineVideoRef}
         timelineAudioRef={timelineAudioRef}
         textItems={textItems}
@@ -712,6 +810,10 @@ function App() {
           setSelectedTextId(null)
           showTimeline()
         }}
+        selectedTimelineItem={items.find((item) => item.id === validSelectedItemId) ?? null}
+        onUpdateTimelineItem={updateTimelineItem}
+        onDeleteTimelineItem={deleteTimelineItem}
+        onCloseTimelineInspector={() => setSelectedItemId(null)}
         selectedAudioItem={audioItems.find((item) => item.id === validSelectedAudioItemId) ?? null}
         selectedAudioClipName={
           validSelectedAudioItemId
@@ -719,7 +821,9 @@ function App() {
             : undefined
         }
         audioTrackCount={effectiveTrackCount}
+        onUpdateAudioItem={updateAudioItem}
         onAudioVolumeChange={setAudioVolume}
+        onAudioFadeChange={setAudioFade}
         onMoveAudioToTrack={moveAudioToTrack}
         onDeleteAudioItem={(id) => {
           setAudioItems((current) => current.filter((item) => item.id !== id))

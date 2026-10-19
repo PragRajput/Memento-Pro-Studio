@@ -1,4 +1,4 @@
-import type { AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition } from './types.ts'
+import type { AspectRatio, AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition } from './types.ts'
 
 const DB_NAME = 'MiniVideoEditorDB'
 const DB_VERSION = 1
@@ -33,6 +33,7 @@ export interface ProjectData {
   textItems: TextOverlay[]
   transitions: Transition[]
   audioTrackCount: number
+  aspectRatio?: AspectRatio
   clips: SerializedMediaClip[]
   audioClips: SerializedAudioClip[]
 }
@@ -64,6 +65,7 @@ export async function persistProject(
   textItems: readonly TextOverlay[],
   transitions: readonly Transition[],
   audioTrackCount: number,
+  aspectRatio?: AspectRatio,
 ): Promise<void> {
   if (typeof indexedDB === 'undefined') return
   try {
@@ -95,6 +97,7 @@ export async function persistProject(
       textItems: [...textItems],
       transitions: [...transitions],
       audioTrackCount,
+      aspectRatio,
       clips: serializedClips,
       audioClips: serializedAudioClips,
     }
@@ -120,6 +123,7 @@ export async function restoreProject(): Promise<{
   textItems: TextOverlay[]
   transitions: Transition[]
   audioTrackCount: number
+  aspectRatio: AspectRatio
 } | null> {
   if (typeof indexedDB === 'undefined') return null
   try {
@@ -174,6 +178,7 @@ export async function restoreProject(): Promise<{
       textItems: project.textItems ?? [],
       transitions: project.transitions ?? [],
       audioTrackCount: project.audioTrackCount ?? 2,
+      aspectRatio: project.aspectRatio ?? '16:9',
     }
   } catch (err) {
     console.warn('Failed to restore project from IndexedDB:', err)

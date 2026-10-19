@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, PointerEvent } from 'react'
+import { AUDIO_EFFECT_PRESETS } from '../audioEffects.ts'
 import { clampAudioStart } from '../audioTimeline.ts'
 import { AUDIO_DRAG_TYPE } from '../dnd.ts'
 import { formatDuration } from '../format.ts'
@@ -280,6 +281,16 @@ export function AudioLane({
             <span className="item-label">
               <span className="audio-badge-mini" aria-hidden="true">♪</span>
               {clip?.name}
+              {item.effect && item.effect !== 'none' && (
+                <span className="audio-effect-badge-mini" title={`Audio Effect: ${item.effect}`}>
+                  {AUDIO_EFFECT_PRESETS.find((p) => p.id === item.effect)?.icon ?? '🎛️'}
+                </span>
+              )}
+              {item.speed && item.speed !== 1 && (
+                <span className="audio-speed-badge-mini" title={`Playback Speed: ${item.speed}x`}>
+                  {item.speed}x
+                </span>
+              )}
             </span>
             <div className="audio-item-controls" onPointerDown={(event) => event.stopPropagation()}>
               <button

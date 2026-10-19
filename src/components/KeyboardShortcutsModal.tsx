@@ -18,6 +18,16 @@ const SHORTCUTS: ShortcutItem[] = [
     description: 'Toggle playback of the timeline or selected media clip',
   },
   {
+    keys: ['Cmd / Ctrl', 'Z'],
+    label: 'Undo',
+    description: 'Undo the last timeline edit, trim, filter, or volume change',
+  },
+  {
+    keys: ['Cmd+Shift+Z', 'Ctrl+Y'],
+    label: 'Redo',
+    description: 'Redo the previously undone action',
+  },
+  {
     keys: ['S'],
     label: 'Split Clip',
     description: 'Split the video, audio, or text item at the current playhead position',

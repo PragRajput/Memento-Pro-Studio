@@ -14,11 +14,13 @@ import {
   getFirstEncodableVideoCodec,
 } from 'mediabunny'
 import type { AudioCodec, InputAudioTrack, InputVideoTrack, VideoCodec, VideoSample } from 'mediabunny'
+import { applyAudioEffectNodes } from '../audioEffects.ts'
+import { getCssFilter } from '../filters.ts'
 import { drawTextOverlays } from '../textDraw.ts'
-import { clamp, locate } from '../timeline.ts'
+import { clamp, itemLength, locate } from '../timeline.ts'
 import { locateTransition } from '../transitionTimeline.ts'
-import type { AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition, TransitionType } from '../types.ts'
-import { outputSize, planFrames } from './plan.ts'
+import type { AspectRatio, AudioClip, AudioEffectType, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition, TransitionType } from '../types.ts'
+import { outputSizeForAspectRatio, planFrames } from './plan.ts'
 import type { Size } from './plan.ts'
 
 
@@ -85,6 +87,7 @@ export async function exportTimeline(
   audioClips: ReadonlyMap<string, AudioClip>,
   textItems: readonly TextOverlay[] = [],
   transitions: readonly Transition[] = [],
+  aspectRatio: AspectRatio = '16:9',
   { signal, onProgress }: ExportOptions = {},
 ): Promise<ExportResult> {
   if (items.length === 0) throw new Error('Add clips to the timeline before exporting.')
@@ -92,7 +95,7 @@ export async function exportTimeline(
   if (firstClip === undefined) throw new Error('A timeline clip is missing from the Media panel.')
 
   const plan = planFrames(items, EXPORT_FPS)
-  const size = outputSize(firstClip)
+  const size = outputSizeForAspectRatio(aspectRatio, firstClip)
   const notes: string[] = []
   const report = progressReporter(onProgress)
   const opened = new Map<string, OpenVideoClip>()
@@ -267,7 +270,7 @@ export async function exportTimeline(
           const visualA = await getVisualForClip(active.itemA.clipId, iterators, opened)
           const visualB = await getVisualForClip(active.itemB.clipId, iterators, opened)
           try {
-            drawTransitionFrame(context, size, visualA, visualB, active.transition.type, active.progress)
+            drawTransitionFrame(context, size, visualA, visualB, active.transition.type, active.progress, active.itemA, active.itemB)
           } finally {
             closeVisual(visualA)
             closeVisual(visualB)
@@ -278,7 +281,7 @@ export async function exportTimeline(
             const item = items[pos.index]
             const visual = await getVisualForClip(item.clipId, iterators, opened)
             try {
-              drawVisual(context, visual, size)
+              drawVisual(context, visual, size, item)
             } finally {
               closeVisual(visual)
             }
@@ -392,22 +395,40 @@ async function mixTimelineAudio(
     if (videoItem !== null && !videoItem.muted && videoOpen !== null && videoOpen.audio !== null) {
       contributions.push({
         track: videoOpen.audio,
-        sourceStart: videoItem.inPoint + videoPosition!.offset,
+        sourceStart: videoItem.inPoint + videoPosition!.offset * (videoItem.speed ?? 1),
         gain: 1,
       })
     }
 
     // Collect all active parallel audio tracks at this point in time
-    const activeAudioItems = audioItems.filter(
-      (item) => resolveTime >= item.start && resolveTime < item.start + (item.outPoint - item.inPoint),
-    )
+    const activeAudioItems = audioItems.filter((item) => {
+      const len = itemLength(item)
+      return resolveTime >= item.start && resolveTime < item.start + len
+    })
     for (const audioItem of activeAudioItems) {
       const audioOpen = openedAudio.get(audioItem.clipId)
       if (audioOpen !== undefined && audioOpen.audio !== null) {
+        const speed = audioItem.speed ?? 1
+        // Calculate fade in and fade out volume multipliers
+        const offset = Math.max(0, resolveTime - audioItem.start)
+        const len = itemLength(audioItem)
+        let fadeMultiplier = 1
+        if (audioItem.fadeIn && audioItem.fadeIn > 0 && offset < audioItem.fadeIn) {
+          fadeMultiplier = Math.min(fadeMultiplier, Math.max(0, offset / audioItem.fadeIn))
+        }
+        if (audioItem.fadeOut && audioItem.fadeOut > 0) {
+          const remaining = len - offset
+          if (remaining < audioItem.fadeOut) {
+            fadeMultiplier = Math.min(fadeMultiplier, Math.max(0, remaining / audioItem.fadeOut))
+          }
+        }
         contributions.push({
           track: audioOpen.audio,
-          sourceStart: audioItem.inPoint + (spanStart - audioItem.start),
-          gain: audioItem.volume,
+          sourceStart: audioItem.inPoint + (spanStart - audioItem.start) * speed,
+          gain: clamp(audioItem.volume * fadeMultiplier, 0, 1),
+          effect: audioItem.effect,
+          effectIntensity: audioItem.effectIntensity,
+          speed,
         })
       }
     }
@@ -419,7 +440,7 @@ async function mixTimelineAudio(
   }
 }
 
-/** Every point audio actually changes: video-item boundaries, audio-item boundaries, and the ends. */
+/** Every point audio actually changes: video-item boundaries, audio-item boundaries, fades, and the ends. */
 function collectBreakpoints(
   items: readonly TimelineItem[],
   audioItems: readonly AudioTimelineItem[],
@@ -429,11 +450,24 @@ function collectBreakpoints(
   let time = 0
   for (const item of items) {
     points.add(time)
-    time += item.outPoint - item.inPoint
+    time += (item.outPoint - item.inPoint) / (item.speed ?? 1)
   }
   for (const item of audioItems) {
+    const len = itemLength(item)
     points.add(clampToRange(item.start, 0, duration))
-    points.add(clampToRange(item.start + (item.outPoint - item.inPoint), 0, duration))
+    if (item.fadeIn && item.fadeIn > 0) {
+      for (let s = 0.1; s < item.fadeIn; s += 0.1) {
+        points.add(clampToRange(item.start + s, 0, duration))
+      }
+      points.add(clampToRange(item.start + item.fadeIn, 0, duration))
+    }
+    if (item.fadeOut && item.fadeOut > 0) {
+      for (let s = 0.1; s < item.fadeOut; s += 0.1) {
+        points.add(clampToRange(item.start + len - s, 0, duration))
+      }
+      points.add(clampToRange(item.start + len - item.fadeOut, 0, duration))
+    }
+    points.add(clampToRange(item.start + len, 0, duration))
   }
   const sorted = [...points].sort((a, b) => a - b)
   return sorted.filter((value, index) => index === 0 || value - sorted[index - 1] > BREAKPOINT_EPSILON)
@@ -448,6 +482,9 @@ interface AudioContribution {
   sourceStart: number
   /** 0 to 1. */
   gain: number
+  effect?: AudioEffectType
+  effectIntensity?: number
+  speed?: number
 }
 
 /** Render a span of audio from zero, one, or multiple overlapping sources. */
@@ -460,22 +497,28 @@ async function renderSpan(
     return new AudioBuffer({ length: frames, numberOfChannels: CHANNELS, sampleRate: SAMPLE_RATE })
   }
   const rendered = await Promise.all(
-    contributions.map((c) => renderItemAudio(c.track, c.sourceStart, frames, c.gain, signal)),
+    contributions.map((c) =>
+      renderItemAudio(c.track, c.sourceStart, frames, c.gain, signal, c.effect, c.effectIntensity, c.speed),
+    ),
   )
   return mixMultipleBuffers(rendered)
 }
 
-/** Decode `frames / SAMPLE_RATE` seconds of a track from `start`, as 48 kHz stereo, scaled by `gain`. */
+/** Decode `frames / SAMPLE_RATE` seconds of a track from `start`, as 48 kHz stereo, scaled by `gain` and effects. */
 async function renderItemAudio(
   track: InputAudioTrack,
   start: number,
   frames: number,
   gain: number,
   signal: AbortSignal | undefined,
+  effect?: AudioEffectType,
+  effectIntensity?: number,
+  speed: number = 1,
 ): Promise<AudioBuffer> {
   const sourceRate = await track.getSampleRate()
   const channelCount = await track.getNumberOfChannels()
-  const span = frames / SAMPLE_RATE
+  const safeSpeed = speed > 0 ? speed : 1
+  const span = (frames / SAMPLE_RATE) * safeSpeed
   const sourceFrames = Math.max(1, Math.ceil(span * sourceRate))
   const channels = Array.from({ length: channelCount }, () => new Float32Array(sourceFrames))
 
@@ -494,11 +537,16 @@ async function renderItemAudio(
 
   const segment = new AudioBuffer({ length: sourceFrames, numberOfChannels: channelCount, sampleRate: sourceRate })
   for (const [channel, data] of channels.entries()) segment.copyToChannel(data, channel)
-  // Resample to 48 kHz and mix to stereo (mono plays on both sides), applying gain.
+  // Resample to 48 kHz, apply playback speed, and mix to stereo, applying gain & effects.
   const mixer = new OfflineAudioContext({ numberOfChannels: CHANNELS, length: frames, sampleRate: SAMPLE_RATE })
-  const node = new AudioBufferSourceNode(mixer, { buffer: segment })
+  const node = new AudioBufferSourceNode(mixer, { buffer: segment, playbackRate: safeSpeed })
   const gainNode = new GainNode(mixer, { gain })
-  node.connect(gainNode).connect(mixer.destination)
+  node.connect(gainNode)
+  if (effect && effect !== 'none' && (effectIntensity ?? 1) > 0) {
+    applyAudioEffectNodes(mixer, gainNode, mixer.destination, effect, effectIntensity ?? 1)
+  } else {
+    gainNode.connect(mixer.destination)
+  }
   node.start(0)
   return mixer.startRendering()
 }
@@ -551,11 +599,12 @@ function drawImageWithFit(
   context: CanvasRenderingContext2D,
   image: ImageBitmap,
   targetSize: Size,
+  fitMode: 'contain' | 'cover' = 'contain',
 ) {
   const { width: tw, height: th } = targetSize
   const { width: sw, height: sh } = image
   if (sw === 0 || sh === 0) return
-  const scale = Math.min(tw / sw, th / sh)
+  const scale = fitMode === 'cover' ? Math.max(tw / sw, th / sh) : Math.min(tw / sw, th / sh)
   const dw = sw * scale
   const dh = sh * scale
   const dx = (tw - dw) / 2
@@ -567,13 +616,43 @@ function drawVisual(
   context: CanvasRenderingContext2D,
   visual: RenderableVisual | null,
   size: Size,
+  item?: TimelineItem | null,
 ) {
   if (!visual) return
-  if (visual.kind === 'video') {
-    visual.sample.drawWithFit(context, { fit: 'contain' })
-  } else {
-    drawImageWithFit(context, visual.bitmap, size)
+  context.save()
+
+  // Apply CSS filter if available
+  const filter = getCssFilter(item?.filter, item?.filterIntensity)
+  if (filter && filter !== 'none' && 'filter' in context) {
+    const existing = context.filter && context.filter !== 'none' ? context.filter : ''
+    context.filter = existing ? `${existing} ${filter}` : filter
   }
+
+  // Apply Rotation and Flip around canvas center
+  const rotation = item?.rotation ?? 0
+  const flipH = item?.flipH ?? false
+  const flipV = item?.flipV ?? false
+  if (rotation !== 0 || flipH || flipV) {
+    const cx = size.width / 2
+    const cy = size.height / 2
+    context.translate(cx, cy)
+    if (rotation !== 0) {
+      context.rotate((rotation * Math.PI) / 180)
+    }
+    if (flipH || flipV) {
+      context.scale(flipH ? -1 : 1, flipV ? -1 : 1)
+    }
+    context.translate(-cx, -cy)
+  }
+
+  const fitMode = item?.fitMode ?? 'contain'
+  if (visual.kind === 'video') {
+    visual.sample.drawWithFit(context, { fit: fitMode })
+  } else {
+    drawImageWithFit(context, visual.bitmap, size, fitMode)
+  }
+
+  context.restore()
 }
 
 function closeVisual(visual: RenderableVisual | null) {
@@ -611,37 +690,39 @@ function drawTransitionFrame(
   visualB: RenderableVisual | null,
   type: TransitionType,
   progress: number,
+  itemA?: TimelineItem | null,
+  itemB?: TimelineItem | null,
 ) {
   const p = clamp(progress, 0, 1)
 
   if (type === 'crossfade') {
     if (visualA !== null) {
       context.globalAlpha = 1.0
-      drawVisual(context, visualA, size)
+      drawVisual(context, visualA, size, itemA)
     }
     if (visualB !== null) {
       context.globalAlpha = p
-      drawVisual(context, visualB, size)
+      drawVisual(context, visualB, size, itemB)
       context.globalAlpha = 1.0
     }
   } else if (type === 'fade-black') {
     if (p < 0.5) {
       if (visualA !== null) {
         context.globalAlpha = clamp(1 - p * 2, 0, 1)
-        drawVisual(context, visualA, size)
+        drawVisual(context, visualA, size, itemA)
         context.globalAlpha = 1.0
       }
     } else {
       if (visualB !== null) {
         context.globalAlpha = clamp((p - 0.5) * 2, 0, 1)
-        drawVisual(context, visualB, size)
+        drawVisual(context, visualB, size, itemB)
         context.globalAlpha = 1.0
       }
     }
   } else if (type === 'fade-white') {
     if (p < 0.5) {
       if (visualA !== null) {
-        drawVisual(context, visualA, size)
+        drawVisual(context, visualA, size, itemA)
       }
       context.fillStyle = '#ffffff'
       context.globalAlpha = p * 2
@@ -649,7 +730,7 @@ function drawTransitionFrame(
       context.globalAlpha = 1.0
     } else {
       if (visualB !== null) {
-        drawVisual(context, visualB, size)
+        drawVisual(context, visualB, size, itemB)
       }
       context.fillStyle = '#ffffff'
       context.globalAlpha = (1 - p) * 2
@@ -658,76 +739,76 @@ function drawTransitionFrame(
     }
   } else if (type === 'wipe-left') {
     if (visualA !== null) {
-      drawVisual(context, visualA, size)
+      drawVisual(context, visualA, size, itemA)
     }
     if (visualB !== null) {
       context.save()
       context.beginPath()
       context.rect(0, 0, size.width * p, size.height)
       context.clip()
-      drawVisual(context, visualB, size)
+      drawVisual(context, visualB, size, itemB)
       context.restore()
     }
   } else if (type === 'wipe-right') {
     if (visualA !== null) {
-      drawVisual(context, visualA, size)
+      drawVisual(context, visualA, size, itemA)
     }
     if (visualB !== null) {
       context.save()
       context.beginPath()
       context.rect(size.width * (1 - p), 0, size.width * p, size.height)
       context.clip()
-      drawVisual(context, visualB, size)
+      drawVisual(context, visualB, size, itemB)
       context.restore()
     }
   } else if (type === 'wipe-up') {
     if (visualA !== null) {
-      drawVisual(context, visualA, size)
+      drawVisual(context, visualA, size, itemA)
     }
     if (visualB !== null) {
       context.save()
       context.beginPath()
       context.rect(0, 0, size.width, size.height * p)
       context.clip()
-      drawVisual(context, visualB, size)
+      drawVisual(context, visualB, size, itemB)
       context.restore()
     }
   } else if (type === 'wipe-down') {
     if (visualA !== null) {
-      drawVisual(context, visualA, size)
+      drawVisual(context, visualA, size, itemA)
     }
     if (visualB !== null) {
       context.save()
       context.beginPath()
       context.rect(0, size.height * (1 - p), size.width, size.height * p)
       context.clip()
-      drawVisual(context, visualB, size)
+      drawVisual(context, visualB, size, itemB)
       context.restore()
     }
   } else if (type === 'slide-left') {
     if (visualA !== null) {
       context.save()
       context.translate(-size.width * p, 0)
-      drawVisual(context, visualA, size)
+      drawVisual(context, visualA, size, itemA)
       context.restore()
     }
     if (visualB !== null) {
       context.save()
       context.translate(size.width * (1 - p), 0)
-      drawVisual(context, visualB, size)
+      drawVisual(context, visualB, size, itemB)
       context.restore()
     }
   } else if (type === 'slide-right') {
     if (visualA !== null) {
       context.save()
       context.translate(size.width * p, 0)
-      drawVisual(context, visualA, size)
+      drawVisual(context, visualA, size, itemA)
       context.restore()
     }
     if (visualB !== null) {
       context.save()
       context.translate(-size.width * (1 - p), 0)
-      drawVisual(context, visualB, size)
+      drawVisual(context, visualB, size, itemB)
       context.restore()
     }
   } else if (type === 'zoom-in') {
@@ -740,7 +821,7 @@ function drawTransitionFrame(
       context.translate(cx, cy)
       context.scale(scaleA, scaleA)
       context.translate(-cx, -cy)
-      drawVisual(context, visualA, size)
+      drawVisual(context, visualA, size, itemA)
       context.restore()
     }
     if (visualB !== null) {
@@ -750,7 +831,7 @@ function drawTransitionFrame(
       context.translate(cx, cy)
       context.scale(scaleB, scaleB)
       context.translate(-cx, -cy)
-      drawVisual(context, visualB, size)
+      drawVisual(context, visualB, size, itemB)
       context.restore()
     }
   } else if (type === 'zoom-out') {
@@ -763,7 +844,7 @@ function drawTransitionFrame(
       context.translate(cx, cy)
       context.scale(scaleA, scaleA)
       context.translate(-cx, -cy)
-      drawVisual(context, visualA, size)
+      drawVisual(context, visualA, size, itemA)
       context.restore()
     }
     if (visualB !== null) {
@@ -773,12 +854,12 @@ function drawTransitionFrame(
       context.translate(cx, cy)
       context.scale(scaleB, scaleB)
       context.translate(-cx, -cy)
-      drawVisual(context, visualB, size)
+      drawVisual(context, visualB, size, itemB)
       context.restore()
     }
   } else if (type === 'iris-circle') {
     if (visualA !== null) {
-      drawVisual(context, visualA, size)
+      drawVisual(context, visualA, size, itemA)
     }
     if (visualB !== null) {
       const cx = size.width / 2
@@ -788,7 +869,7 @@ function drawTransitionFrame(
       context.beginPath()
       context.arc(cx, cy, maxRadius * p, 0, Math.PI * 2)
       context.clip()
-      drawVisual(context, visualB, size)
+      drawVisual(context, visualB, size, itemB)
       context.restore()
     }
   } else if (type === 'blur-dissolve') {
@@ -799,7 +880,7 @@ function drawTransitionFrame(
       if (p > 0.01 && 'filter' in context) {
         context.filter = `blur(${(p * maxBlur).toFixed(1)}px)`
       }
-      drawVisual(context, visualA, size)
+      drawVisual(context, visualA, size, itemA)
       context.restore()
     }
     if (visualB !== null) {
@@ -808,7 +889,7 @@ function drawTransitionFrame(
       if (1 - p > 0.01 && 'filter' in context) {
         context.filter = `blur(${((1 - p) * maxBlur).toFixed(1)}px)`
       }
-      drawVisual(context, visualB, size)
+      drawVisual(context, visualB, size, itemB)
       context.restore()
     }
   }

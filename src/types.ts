@@ -40,12 +40,40 @@ export interface AudioClip {
   pitches?: number[]
 }
 
+export type FilterType =
+  | 'none'
+  | 'cinematic'
+  | 'noir'
+  | 'vintage'
+  | 'warm'
+  | 'cool'
+  | 'cyberpunk'
+  | 'vivid'
+  | 'sepia'
+  | 'bleach'
+
+export type AspectRatio = '16:9' | '9:16' | '1:1' | '4:5' | '21:9'
+
 /** One piece of a video or photo clip placed on the primary visual track. Items play back to back. */
 export interface TimelineItem extends SourceRange {
   id: string
   clipId: string
   /** Leaves out this clip's own sound when playing and exporting. */
   muted: boolean
+  /** Stylistic color filter / LUT preset. */
+  filter?: FilterType
+  /** 0 to 1 filter intensity (default 1). */
+  filterIntensity?: number
+  /** Playback speed multiplier (e.g. 0.5 for slow-mo, 2 for timelapse). Default 1. */
+  speed?: number
+  /** Clockwise rotation angle in degrees: 0, 90, 180, 270. Default 0. */
+  rotation?: number
+  /** Mirror horizontally. */
+  flipH?: boolean
+  /** Flip vertically. */
+  flipV?: boolean
+  /** 'contain' keeps aspect ratio with letterboxing; 'cover' crops to fill frame. */
+  fitMode?: 'contain' | 'cover'
 }
 
 export type TransitionType =
@@ -76,6 +104,17 @@ export interface Transition {
   duration: number
 }
 
+export type AudioEffectType =
+  | 'none'
+  | 'bass-boost'
+  | 'treble-boost'
+  | 'vocal-enhance'
+  | 'underwater'
+  | 'telephone'
+  | 'lo-fi'
+  | 'concert-hall'
+  | 'robot'
+
 /**
  * One piece of an audio clip placed on the audio track, at an explicit timeline
  * position. Unlike video items, audio items do not auto-sequence: they can leave
@@ -90,6 +129,16 @@ export interface AudioTimelineItem extends SourceRange {
   volume: number
   /** The lane/track index (0 for Audio 1, 1 for Audio 2, etc.) for parallel audio. */
   trackIndex?: number
+  /** Volume fade-in duration at the start in seconds (default 0). */
+  fadeIn?: number
+  /** Volume fade-out duration at the end in seconds (default 0). */
+  fadeOut?: number
+  /** Stylistic audio effect preset. */
+  effect?: AudioEffectType
+  /** 0 to 1 effect intensity (default 1). */
+  effectIntensity?: number
+  /** Playback speed multiplier (default 1). */
+  speed?: number
 }
 
 export type TextPosition = 'top' | 'center' | 'bottom'
