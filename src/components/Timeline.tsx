@@ -12,7 +12,19 @@ import {
   reorderMarkerTime,
   reorderTarget,
 } from '../timeline.ts'
-import type { AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem } from '../types.ts'
+import {
+  findTransitionBetween,
+  getEffectiveTransitionDuration,
+} from '../transitionTimeline.ts'
+import type {
+  AudioClip,
+  AudioTimelineItem,
+  MediaClip,
+  TextOverlay,
+  TimelineItem,
+  Transition,
+  TransitionType,
+} from '../types.ts'
 
 /** Ruler label spacing candidates, in seconds; the first that leaves room for a label wins. */
 const TICK_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
@@ -41,14 +53,21 @@ interface TimelineProps {
   onMoveItem: (from: number, to: number) => void
   onTrimItem: (id: string, edge: 'in' | 'out', sourceTime: number) => void
   onToggleMute: (id: string) => void
+  transitions?: Transition[]
+  selectedTransitionId?: string | null
+  onSelectTransition?: (id: string | null) => void
+  onAddTransition?: (fromItemId: string, toItemId: string, type?: TransitionType) => void
   audioItems: AudioTimelineItem[]
   audioClips: ReadonlyMap<string, AudioClip>
   selectedAudioItemId: string | null
+  audioTrackCount?: number
   onSelectAudioItem: (id: string | null) => void
   onAddAudioClip: (clipId: string, desiredStart?: number, trackIndex?: number) => void
   onMoveAudioItem: (id: string, start: number) => void
   onTrimAudioItem: (id: string, edge: 'in' | 'out', sourceTime: number) => void
   onAudioVolumeChange: (id: string, volume: number) => void
+  onAddAudioTrack?: () => void
+  onRemoveAudioTrack?: (trackIndex: number) => void
   textItems: TextOverlay[]
   selectedTextId: string | null
   onSelectTextItem: (id: string | null) => void
@@ -82,14 +101,21 @@ export function Timeline({
   onMoveItem,
   onTrimItem,
   onToggleMute,
+  transitions = [],
+  selectedTransitionId = null,
+  onSelectTransition,
+  onAddTransition,
   audioItems,
   audioClips,
   selectedAudioItemId,
+  audioTrackCount = 2,
   onSelectAudioItem,
   onAddAudioClip,
   onMoveAudioItem,
   onTrimAudioItem,
   onAudioVolumeChange,
+  onAddAudioTrack,
+  onRemoveAudioTrack,
   textItems,
   selectedTextId,
   onSelectTextItem,
@@ -102,10 +128,10 @@ export function Timeline({
   const viewportWidth = useElementWidth(scrollRef)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [reorder, setReorder] = useState<Reorder | null>(null)
-  const [extraTracks, setExtraTracks] = useState(0)
+  const [isAddTrackDragOver, setIsAddTrackDragOver] = useState(false)
 
   const maxTrackInItems = audioItems.reduce((max, item) => Math.max(max, item.trackIndex ?? 0), 0)
-  const trackCount = Math.max(2, maxTrackInItems + 1, extraTracks + 1)
+  const trackCount = Math.max(audioTrackCount, maxTrackInItems + 1, 1)
 
   const starts = itemStarts(items)
   const contentWidth = Math.max(viewportWidth, (duration + TRAILING_SPACE) * pps)
@@ -228,53 +254,102 @@ export function Timeline({
   return (
     <section className="panel timeline" aria-label="Timeline">
       <header className="panel-header timeline-toolbar">
-        <h2>Timeline</h2>
-        <div className="transport">
-          <button type="button" onClick={onTogglePlay} disabled={duration <= 0}>
-            {playing ? 'Pause' : 'Play'}
-          </button>
-          <span className="timecode" aria-label="Playhead time">
-            {formatTimecode(time)} / {formatTimecode(duration)}
-          </span>
-          <button type="button" className="secondary" onClick={onSplit} disabled={!canSplit}>
-            Split
+        <div className="timeline-title-area">
+          <h2>Timeline</h2>
+        </div>
+
+        {/* Transport Controls */}
+        <div className="transport-controls">
+          <button
+            type="button"
+            className="transport-btn jump-btn"
+            onClick={() => onSeek(0)}
+            disabled={duration <= 0}
+            title="Jump to Start (Home)"
+          >
+            ⏮
           </button>
           <button
             type="button"
-            className="secondary"
+            className={`transport-btn play-btn${playing ? ' is-playing' : ''}`}
+            onClick={onTogglePlay}
+            disabled={duration <= 0}
+            title={`${playing ? 'Pause' : 'Play'} (Space)`}
+          >
+            <span className="play-icon">{playing ? '❚❚' : '▶'}</span>
+            <span className="play-text">{playing ? 'Pause' : 'Play'}</span>
+          </button>
+          <div className="timecode-display" aria-label="Playhead time">
+            <span className="tc-current">{formatTimecode(time)}</span>
+            <span className="tc-divider">/</span>
+            <span className="tc-total">{formatTimecode(duration)}</span>
+          </div>
+        </div>
+
+        {/* Editing Tools */}
+        <div className="timeline-action-tools">
+          <button
+            type="button"
+            className="tool-btn split-btn"
+            onClick={onSplit}
+            disabled={!canSplit}
+            title="Split selected or active clip at playhead (S)"
+          >
+            <span className="tool-icon">✂</span>
+            <span>Split</span>
+            <kbd className="key-shortcut">S</kbd>
+          </button>
+          <button
+            type="button"
+            className="tool-btn add-title-btn"
             onClick={onAddText}
             disabled={duration <= 0}
             title="Add a text title overlay at the playhead"
           >
-            + Title
+            <span className="tool-icon">T</span>
+            <span>+ Title</span>
           </button>
           <button
             type="button"
-            className="secondary"
-            onClick={() => setExtraTracks((c) => c + 1)}
+            className="tool-btn add-audio-track-btn"
+            onClick={() => onAddAudioTrack?.()}
             title="Add another parallel audio track"
           >
-            + Audio Track
+            <span className="tool-icon">♪</span>
+            <span>+ Audio Track</span>
           </button>
           <button
             type="button"
-            className="secondary"
+            className="tool-btn delete-tool-btn"
             onClick={onDelete}
-            disabled={selectedItemId === null && selectedAudioItemId === null && selectedTextId === null}
+            disabled={
+              selectedItemId === null &&
+              selectedAudioItemId === null &&
+              selectedTextId === null &&
+              selectedTransitionId === null
+            }
+            title="Delete selected item (Del / Backspace)"
           >
-            Delete
+            <span className="tool-icon">🗑</span>
+            <span>Delete</span>
+            <kbd className="key-shortcut">Del</kbd>
           </button>
         </div>
-        <label className="zoom">
-          Zoom
+
+        {/* Zoom Slider */}
+        <div className="zoom-controls">
+          <span className="zoom-icon" title="Zoom out">−</span>
           <input
             type="range"
+            className="zoom-slider"
             min={10}
             max={200}
             value={pps}
             onChange={(event) => onZoom(Number(event.target.value))}
+            title={`Zoom level: ${pps} px/sec`}
           />
-        </label>
+          <span className="zoom-icon" title="Zoom in">+</span>
+        </div>
       </header>
 
       <div className="timeline-scroll" ref={scrollRef}>
@@ -305,10 +380,14 @@ export function Timeline({
             onTrimItem={onTrimTextItem}
           />
           <div
-            className="track"
+            className="track video-track"
             ref={trackRef}
+            aria-label="Video Track 1"
             onPointerDown={(event) => {
-              if (event.target === event.currentTarget) onSelectItem(null)
+              if (event.target === event.currentTarget) {
+                onSelectItem(null)
+                onSelectTransition?.(null)
+              }
             }}
             onDragOver={handleDragOver}
             onDragLeave={(event) => {
@@ -316,6 +395,9 @@ export function Timeline({
             }}
             onDrop={handleDrop}
           >
+            <div className="track-badge video-badge" title="Video Track 1">
+              <span>V1</span>
+            </div>
             {items.length === 0 && (
               <p className="empty track-hint">Drag clips here from Media, or click + on a clip.</p>
             )}
@@ -359,6 +441,57 @@ export function Timeline({
                 </div>
               )
             })}
+            {items.slice(0, -1).map((itemA, index) => {
+              const itemB = items[index + 1]
+              const cutTime = starts[index + 1]
+              const cutX = cutTime * pps
+              const transition = findTransitionBetween(transitions, itemA.id, itemB.id)
+              const isSelected = transition !== undefined && selectedTransitionId === transition.id
+
+              if (transition) {
+                const effDuration = getEffectiveTransitionDuration(transition, itemA, itemB)
+                const width = Math.max(34, effDuration * pps)
+                const left = cutX - width / 2
+                return (
+                  <div
+                    key={transition.id}
+                    className={`transition-chip${isSelected ? ' selected' : ''}`}
+                    style={{ left, width }}
+                    title={`${transition.type} (${effDuration.toFixed(1)}s) - click to configure`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onSelectItem(null)
+                      onSelectAudioItem(null)
+                      onSelectTextItem(null)
+                      onSelectTransition?.(transition.id)
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <span className="transition-icon">⧉</span>
+                    <span className="transition-name">
+                      {transition.type === 'crossfade' ? 'Dissolve' : transition.type === 'fade-black' ? 'Dip' : 'Wipe'}
+                    </span>
+                  </div>
+                )
+              }
+
+              return (
+                <button
+                  key={`cut-${itemA.id}-${itemB.id}`}
+                  type="button"
+                  className="add-transition-cut-btn"
+                  style={{ left: cutX }}
+                  title="Add transition between clips"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onAddTransition?.(itemA.id, itemB.id)
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  ⧉
+                </button>
+              )
+            })}
             {markerTime !== null && <div className="drop-marker" style={{ left: markerTime * pps }} />}
           </div>
           {Array.from({ length: trackCount }, (_, tIndex) => (
@@ -371,6 +504,8 @@ export function Timeline({
               maxEnd={duration}
               trackIndex={tIndex}
               trackLabel={`A${tIndex + 1}`}
+              canRemoveTrack={trackCount > 1}
+              onRemoveTrack={onRemoveAudioTrack}
               onSelectItem={onSelectAudioItem}
               onAddClip={(clipId, start) => onAddAudioClip(clipId, start, tIndex)}
               onMoveItem={onMoveAudioItem}
@@ -378,7 +513,38 @@ export function Timeline({
               onVolumeChange={onAudioVolumeChange}
             />
           ))}
-          <div className="playhead" style={{ left: playheadX }} />
+          <div
+            className={`add-track-lane${isAddTrackDragOver ? ' drag-over' : ''}`}
+            onDragOver={(e) => {
+              if (e.dataTransfer.types.includes(AUDIO_DRAG_TYPE)) {
+                e.preventDefault()
+                e.stopPropagation()
+                e.dataTransfer.dropEffect = 'copy'
+                setIsAddTrackDragOver(true)
+              }
+            }}
+            onDragLeave={() => setIsAddTrackDragOver(false)}
+            onDrop={(e) => {
+              setIsAddTrackDragOver(false)
+              if (e.dataTransfer.types.includes(AUDIO_DRAG_TYPE)) {
+                e.preventDefault()
+                e.stopPropagation()
+                const clipId = e.dataTransfer.getData(AUDIO_DRAG_TYPE)
+                if (clipId) {
+                  const rawTime = Math.max(0, trackTime(e.clientX))
+                  const snappedTime = rawTime < 1.5 ? 0 : rawTime
+                  onAddAudioClip(clipId, snappedTime, trackCount)
+                }
+              }
+            }}
+            onClick={() => onAddAudioTrack?.()}
+            title="Click or drop audio here to add a new audio track"
+          >
+            <span>+ Drop audio here or click to add track</span>
+          </div>
+          <div className="playhead" style={{ left: playheadX }}>
+            <div className="playhead-head" />
+          </div>
         </div>
       </div>
     </section>

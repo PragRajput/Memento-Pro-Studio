@@ -8,14 +8,18 @@ import {
   splitAudioAt,
   trimAudioItem,
 } from './audioTimeline.ts'
+import { ConfirmNewProjectModal } from './components/ConfirmNewProjectModal.tsx'
 import { ExportDialog } from './components/ExportDialog.tsx'
+import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal.tsx'
 import type { MediaSelection } from './components/MediaBin.tsx'
 import { MediaBin } from './components/MediaBin.tsx'
 import { Preview } from './components/Preview.tsx'
 import { Timeline } from './components/Timeline.tsx'
 import { outputSize } from './export/plan.ts'
 import { useExporter } from './export/useExporter.ts'
+import { formatTimecode } from './format.ts'
 import { loadMedia } from './media.ts'
+import { clearProjectStorage, persistProject, restoreProject } from './projectStorage.ts'
 import {
   createTextOverlay,
   moveTextOverlay,
@@ -23,7 +27,12 @@ import {
   trimTextOverlay,
 } from './textTimeline.ts'
 import { createItem, insertItem, itemLength, moveItem, splitAt, timelineDuration, trimItem } from './timeline.ts'
-import type { AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem } from './types.ts'
+import {
+  cleanTransitions,
+  createTransition,
+  maxTransitionDuration,
+} from './transitionTimeline.ts'
+import type { AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition, TransitionType } from './types.ts'
 import { useAudioLanePlayback } from './useAudioLanePlayback.ts'
 import { useSequencePlayer } from './useSequencePlayer.ts'
 import './App.css'
@@ -35,23 +44,47 @@ function App() {
   const [importing, setImporting] = useState(0)
   const [errors, setErrors] = useState<string[]>([])
   const [items, setItems] = useState<TimelineItem[]>([])
+  const [transitions, setTransitions] = useState<Transition[]>([])
   const [audioItems, setAudioItems] = useState<AudioTimelineItem[]>([])
+  const [audioTrackCount, setAudioTrackCount] = useState(2)
   const [textItems, setTextItems] = useState<TextOverlay[]>([])
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
   const [selectedAudioItemId, setSelectedAudioItemId] = useState<string | null>(null)
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null)
+  const [selectedTransitionId, setSelectedTransitionId] = useState<string | null>(null)
   const [showingClip, setShowingClip] = useState(true)
   const [pixelsPerSecond, setPixelsPerSecond] = useState(60)
   const [exportOpen, setExportOpen] = useState(false)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [confirmNewOpen, setConfirmNewOpen] = useState(false)
+  const [storageLoaded, setStorageLoaded] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
   const timelineVideoRef = useRef<HTMLVideoElement>(null)
+  const timelineSecondaryVideoRef = useRef<HTMLVideoElement>(null)
   const timelineAudioRef = useRef<HTMLAudioElement>(null)
 
   const clipsById = useMemo(() => new Map(clips.map((clip) => [clip.id, clip])), [clips])
   const audioClipsById = useMemo(() => new Map(audioClips.map((clip) => [clip.id, clip])), [audioClips])
+  const maxTrackInItems = audioItems.reduce((max, item) => Math.max(max, item.trackIndex ?? 0), 0)
+  const effectiveTrackCount = Math.max(audioTrackCount, maxTrackInItems + 1, 1)
   const audioDuration = audioItems.reduce((max, item) => Math.max(max, audioItemEnd(item)), 0)
   const textDuration = textItems.reduce((max, item) => Math.max(max, item.start + item.duration), 0)
   const totalDuration = Math.max(timelineDuration(items), audioDuration, textDuration)
-  const player = useSequencePlayer(timelineVideoRef, items, clipsById, totalDuration)
+
+  const validTransitions = useMemo(() => cleanTransitions(items, transitions), [items, transitions])
+  const validSelectedTransitionId =
+    selectedTransitionId !== null && validTransitions.some((t) => t.id === selectedTransitionId)
+      ? selectedTransitionId
+      : null
+
+  const player = useSequencePlayer(
+    timelineVideoRef,
+    timelineSecondaryVideoRef,
+    items,
+    clipsById,
+    validTransitions,
+    totalDuration,
+  )
 
   useAudioLanePlayback(timelineAudioRef, audioItems, audioClipsById, player.time, player.playing)
   // A selection stops being valid the moment its item disappears, however that
@@ -66,11 +99,99 @@ function App() {
   const validSelectedTextId =
     selectedTextId !== null && textItems.some((item) => item.id === selectedTextId) ? selectedTextId : null
 
+  const selectedTransition = validTransitions.find((t) => t.id === validSelectedTransitionId) ?? null
+  const selectedTransitionItemA = selectedTransition
+    ? items.find((i) => i.id === selectedTransition.fromItemId) ?? null
+    : null
+  const selectedTransitionItemB = selectedTransition
+    ? items.find((i) => i.id === selectedTransition.toItemId) ?? null
+    : null
+  const selectedTransitionMaxDuration =
+    selectedTransitionItemA && selectedTransitionItemB
+      ? maxTransitionDuration(selectedTransitionItemA, selectedTransitionItemB)
+      : 3
+
   const videoSplitResult = splitAt(items, player.time)
   const audioSplitResult = splitAudioAt(audioItems, player.time, validSelectedAudioItemId)
   const textSplitResult = splitTextAtTime(textItems, player.time)
-  const exporter = useExporter(items, clipsById, audioItems, audioClipsById, textItems)
+  const exporter = useExporter(items, clipsById, audioItems, audioClipsById, textItems, validTransitions)
 
+  // 1. Rehydrate project from IndexedDB on initial mount
+  useEffect(() => {
+    let cancelled = false
+    void restoreProject().then((restored) => {
+      if (cancelled) return
+      if (restored) {
+        setItems(restored.items)
+        setClips(restored.clips)
+        setAudioItems(restored.audioItems)
+        setAudioClips(restored.audioClips)
+        setTextItems(restored.textItems)
+        setTransitions(restored.transitions)
+        setAudioTrackCount(restored.audioTrackCount)
+        if (restored.items.length > 0 || restored.audioItems.length > 0) {
+          setShowingClip(false)
+        }
+        setSaveStatus('saved')
+      }
+      setStorageLoaded(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // 2. Debounced auto-save active project whenever edits occur
+  useEffect(() => {
+    if (!storageLoaded) return
+    const timer = setTimeout(async () => {
+      setSaveStatus('saving')
+      await persistProject(
+        items,
+        clips,
+        audioItems,
+        audioClips,
+        textItems,
+        validTransitions,
+        effectiveTrackCount,
+      )
+      setSaveStatus('saved')
+    }, 800)
+    return () => clearTimeout(timer)
+  }, [
+    storageLoaded,
+    items,
+    clips,
+    audioItems,
+    audioClips,
+    textItems,
+    validTransitions,
+    effectiveTrackCount,
+  ])
+
+  // 3. Clear current project and reset to clean state
+  const startNewProject = async () => {
+    player.pause()
+    for (const c of clips) URL.revokeObjectURL(c.url)
+    for (const ac of audioClips) URL.revokeObjectURL(ac.url)
+    await clearProjectStorage()
+    setClips([])
+    setAudioClips([])
+    setItems([])
+    setAudioItems([])
+    setTextItems([])
+    setTransitions([])
+    setAudioTrackCount(2)
+    setSelection(null)
+    setSelectedItemId(null)
+    setSelectedAudioItemId(null)
+    setSelectedTextId(null)
+    setSelectedTransitionId(null)
+    setShowingClip(true)
+    setConfirmNewOpen(false)
+    setSaveStatus('idle')
+    player.seek(0)
+  }
 
   const importFiles = async (files: File[]) => {
     if (files.length === 0) return
@@ -142,13 +263,23 @@ function App() {
 
     const clipDuration = Number.isFinite(clip.duration) && clip.duration > 0 ? clip.duration : 30
 
-    // Decide track: if not specified (e.g. '+' button), if Track 0 has audio at 0:00, auto-assign Track 1
     let chosenTrack = explicitTrackIndex ?? 0
     if (explicitTrackIndex === undefined) {
-      const track0Busy = audioItems.some((item) => (item.trackIndex ?? 0) === 0 && item.start < 1.5)
-      const track1Busy = audioItems.some((item) => (item.trackIndex ?? 0) === 1 && item.start < 1.5)
-      if (track0Busy && !track1Busy) {
-        chosenTrack = 1
+      // Find the first track where 0:00 (or playhead) is free
+      const freeTrack = Array.from({ length: effectiveTrackCount }, (_, idx) => idx).find((idx) => {
+        return !audioItems.some((item) => (item.trackIndex ?? 0) === idx && item.start < 1.5)
+      })
+      if (freeTrack !== undefined) {
+        chosenTrack = freeTrack
+      } else {
+        const trackWithRoom = Array.from({ length: effectiveTrackCount }, (_, idx) => idx).find((idx) => {
+          return findAudioPlacement(audioItems, 0, clipDuration, idx, player.duration) !== null
+        })
+        if (trackWithRoom !== undefined) {
+          chosenTrack = trackWithRoom
+        } else {
+          chosenTrack = effectiveTrackCount
+        }
       }
     }
 
@@ -156,19 +287,28 @@ function App() {
     if (desiredStart !== undefined) {
       targetStart = desiredStart < 1.5 ? 0 : desiredStart
     } else {
-      // From '+' button: if beginning of chosen track is open, place at 0:00
       const startBlocked = audioItems.some(
         (item) => (item.trackIndex ?? 0) === chosenTrack && item.start < 1.5,
       )
       targetStart = startBlocked ? nextAudioStart(audioItems, chosenTrack) : 0
     }
 
-    const placement = findAudioPlacement(
+    let placement = findAudioPlacement(
       audioItems,
       targetStart,
       clipDuration,
       chosenTrack,
+      player.duration,
     )
+
+    if (placement === null && explicitTrackIndex === undefined) {
+      const newTrackIndex = effectiveTrackCount
+      const newPlacement = findAudioPlacement(audioItems, 0, clipDuration, newTrackIndex, player.duration)
+      if (newPlacement !== null) {
+        placement = newPlacement
+        chosenTrack = newTrackIndex
+      }
+    }
 
     if (placement === null) {
       setErrors(['Audio track is full. Trim or remove an audio item to make room.'])
@@ -177,6 +317,7 @@ function App() {
 
     const item = createAudioItem(clipId, 0, placement.length, placement.start, chosenTrack)
     setAudioItems((current) => [...current, item])
+    setAudioTrackCount((prev) => Math.max(prev, chosenTrack + 1))
     setSelectedAudioItemId(item.id)
     setSelectedItemId(null)
     setSelectedTextId(null)
@@ -229,10 +370,70 @@ function App() {
     setAudioItems((current) => {
       const item = current.find((candidate) => candidate.id === id)
       if (!item) return current
-      const clamped = clampAudioStart(current, id, start, itemLength(item), player.duration)
+      const clamped = clampAudioStart(
+        current,
+        id,
+        start,
+        itemLength(item),
+        player.duration,
+        item.trackIndex ?? 0,
+      )
       return clamped === null ? current : current.map((candidate) => (candidate.id === id ? { ...candidate, start: clamped } : candidate))
     })
     showTimeline()
+  }
+
+  const moveAudioToTrack = (id: string, targetTrackIndex: number) => {
+    setAudioItems((current) => {
+      const item = current.find((candidate) => candidate.id === id)
+      if (!item) return current
+      const len = itemLength(item)
+      const clamped = clampAudioStart(current, id, item.start, len, player.duration, targetTrackIndex)
+      if (clamped !== null) {
+        return current.map((candidate) =>
+          candidate.id === id ? { ...candidate, trackIndex: targetTrackIndex, start: clamped } : candidate,
+        )
+      }
+      const placement = findAudioPlacement(
+        current.filter((c) => c.id !== id),
+        item.start,
+        len,
+        targetTrackIndex,
+        player.duration,
+      )
+      if (placement !== null) {
+        return current.map((candidate) =>
+          candidate.id === id
+            ? {
+                ...candidate,
+                trackIndex: targetTrackIndex,
+                start: placement.start,
+                outPoint: candidate.inPoint + placement.length,
+              }
+            : candidate,
+        )
+      }
+      setErrors([`Cannot move audio to Track ${targetTrackIndex + 1}: no space available.`])
+      return current
+    })
+    setAudioTrackCount((prev) => Math.max(prev, targetTrackIndex + 1))
+    showTimeline()
+  }
+
+  const addAudioTrack = () => {
+    setAudioTrackCount((prev) => Math.max(prev, effectiveTrackCount) + 1)
+  }
+
+  const removeAudioTrack = (trackIndexToRemove: number) => {
+    const hasItems = audioItems.some((item) => (item.trackIndex ?? 0) === trackIndexToRemove)
+    if (hasItems) return
+    setAudioItems((current) =>
+      current.map((item) => {
+        const idx = item.trackIndex ?? 0
+        return idx > trackIndexToRemove ? { ...item, trackIndex: idx - 1 } : item
+      }),
+    )
+    setAudioTrackCount(Math.max(1, effectiveTrackCount - 1))
   }
 
   const moveText = (id: string, start: number) => {
@@ -268,6 +469,30 @@ function App() {
     showTimeline()
   }
 
+  const addTransition = (fromItemId: string, toItemId: string, type: TransitionType = 'crossfade') => {
+    const newTransition = createTransition(fromItemId, toItemId, type)
+    setTransitions((current) => [
+      ...current.filter((t) => !(t.fromItemId === fromItemId && t.toItemId === toItemId)),
+      newTransition,
+    ])
+    setSelectedTransitionId(newTransition.id)
+    setSelectedItemId(null)
+    setSelectedAudioItemId(null)
+    setSelectedTextId(null)
+    showTimeline()
+  }
+
+  const updateTransition = (updated: Transition) => {
+    setTransitions((current) => current.map((t) => (t.id === updated.id ? updated : t)))
+    showTimeline()
+  }
+
+  const deleteTransition = (id: string) => {
+    setTransitions((current) => current.filter((t) => t.id !== id))
+    setSelectedTransitionId(null)
+    showTimeline()
+  }
+
   const deleteSelectedItem = () => {
     if (validSelectedItemId !== null) {
       setItems((current) => current.filter((item) => item.id !== validSelectedItemId))
@@ -278,6 +503,8 @@ function App() {
     } else if (validSelectedTextId !== null) {
       setTextItems((current) => current.filter((item) => item.id !== validSelectedTextId))
       setSelectedTextId(null)
+    } else if (validSelectedTransitionId !== null) {
+      deleteTransition(validSelectedTransitionId)
     } else {
       return
     }
@@ -295,15 +522,16 @@ function App() {
     else player.play()
   }
 
-  // Space plays/pauses, S splits, Delete/Backspace removes the selected timeline item.
+  // Space plays/pauses, S splits, Delete/Backspace removes the selected timeline item, ? toggles shortcuts.
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return
       if ((event.target as Element).closest('button, input, textarea, select, video, audio')) return
-      if (exportOpen) return
+      if (exportOpen || shortcutsOpen || confirmNewOpen) return
       if (event.key === ' ') togglePlay()
       else if (event.key === 's' || event.key === 'S') split()
       else if (event.key === 'Delete' || event.key === 'Backspace') deleteSelectedItem()
+      else if (event.key === '?') setShortcutsOpen((prev) => !prev)
       else return
       event.preventDefault()
     }
@@ -318,18 +546,78 @@ function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>Mini Video Editor</h1>
-        <button
-          type="button"
-          className="export-button"
-          disabled={items.length === 0}
-          onClick={() => {
-            exporter.reset()
-            setExportOpen(true)
-          }}
-        >
-          Export
-        </button>
+        <div className="app-brand">
+          <div className="brand-logo-box">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="23 7 16 12 23 17 23 7" fill="currentColor" opacity="0.8" />
+              <rect x="1" y="5" width="15" height="14" rx="3" ry="3" />
+            </svg>
+          </div>
+          <div className="brand-meta">
+            <h1>Mini Video Editor</h1>
+            <span className="brand-badge">STUDIO</span>
+          </div>
+        </div>
+
+        <div className="header-project-info">
+          <span className="project-status-dot" />
+          <span className="project-summary-text">
+            {items.length === 0
+              ? 'Empty Project'
+              : `${items.length} clip${items.length === 1 ? '' : 's'} · ${formatTimecode(totalDuration)}`}
+          </span>
+          {storageLoaded && (
+            <div className={`save-status ${saveStatus}`} title="Project is automatically saved in your browser storage">
+              {saveStatus === 'saving' ? (
+                <>
+                  <span className="spinner-icon">⏳</span> Saving...
+                </>
+              ) : saveStatus === 'saved' && (items.length > 0 || clips.length > 0 || audioItems.length > 0 || audioClips.length > 0) ? (
+                <>
+                  <span className="saved-icon">✓</span> Saved
+                </>
+              ) : null}
+            </div>
+          )}
+        </div>
+
+        <div className="header-actions">
+          <button
+            type="button"
+            className="header-shortcuts-btn"
+            onClick={() => setShortcutsOpen(true)}
+            title="Keyboard shortcuts & gestures (?)"
+            aria-label="Keyboard shortcuts"
+          >
+            ⌨ Shortcuts
+          </button>
+          <button
+            type="button"
+            className="btn-header-new"
+            onClick={() => setConfirmNewOpen(true)}
+            disabled={clips.length === 0 && items.length === 0 && audioClips.length === 0 && audioItems.length === 0}
+            title="Clear current timeline and start a new project"
+          >
+            New Project
+          </button>
+          <button
+            type="button"
+            className="export-button"
+            disabled={items.length === 0}
+            onClick={() => {
+              exporter.reset()
+              setExportOpen(true)
+            }}
+            title={items.length === 0 ? 'Add clips to timeline to export' : 'Export timeline as MP4'}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            Export
+          </button>
+        </div>
       </header>
       <MediaBin
         clips={clips}
@@ -361,6 +649,7 @@ function App() {
           if (id !== null) {
             setSelectedItemId(null)
             setSelectedAudioItemId(null)
+            setSelectedTransitionId(null)
           }
           showTimeline()
         }}
@@ -370,6 +659,29 @@ function App() {
           setSelectedTextId(null)
           showTimeline()
         }}
+        selectedAudioItem={audioItems.find((item) => item.id === validSelectedAudioItemId) ?? null}
+        selectedAudioClipName={
+          validSelectedAudioItemId
+            ? audioClipsById.get(audioItems.find((item) => item.id === validSelectedAudioItemId)?.clipId ?? '')?.name
+            : undefined
+        }
+        audioTrackCount={effectiveTrackCount}
+        onAudioVolumeChange={setAudioVolume}
+        onMoveAudioToTrack={moveAudioToTrack}
+        onDeleteAudioItem={(id) => {
+          setAudioItems((current) => current.filter((item) => item.id !== id))
+          setSelectedAudioItemId(null)
+          showTimeline()
+        }}
+        onCloseAudioInspector={() => setSelectedAudioItemId(null)}
+        secondaryVideoRef={timelineSecondaryVideoRef}
+        selectedTransition={selectedTransition}
+        selectedTransitionItemA={selectedTransitionItemA}
+        selectedTransitionItemB={selectedTransitionItemB}
+        selectedTransitionMaxDuration={selectedTransitionMaxDuration}
+        onUpdateTransition={updateTransition}
+        onDeleteTransition={deleteTransition}
+        onCloseTransitionInspector={() => setSelectedTransitionId(null)}
       />
       <Timeline
         items={items}
@@ -389,6 +701,7 @@ function App() {
           setSelectedItemId(id)
           setSelectedAudioItemId(null)
           setSelectedTextId(null)
+          setSelectedTransitionId(null)
           showTimeline()
         }}
         onAddClip={addToTimeline}
@@ -398,19 +711,35 @@ function App() {
         }}
         onTrimItem={trim}
         onToggleMute={toggleMuted}
+        transitions={validTransitions}
+        selectedTransitionId={validSelectedTransitionId}
+        onSelectTransition={(id) => {
+          setSelectedTransitionId(id)
+          if (id !== null) {
+            setSelectedItemId(null)
+            setSelectedAudioItemId(null)
+            setSelectedTextId(null)
+          }
+          showTimeline()
+        }}
+        onAddTransition={addTransition}
         audioItems={audioItems}
         audioClips={audioClipsById}
         selectedAudioItemId={validSelectedAudioItemId}
+        audioTrackCount={effectiveTrackCount}
         onSelectAudioItem={(id) => {
           setSelectedAudioItemId(id)
           setSelectedItemId(null)
           setSelectedTextId(null)
+          setSelectedTransitionId(null)
           showTimeline()
         }}
         onAddAudioClip={addAudioToTimeline}
         onMoveAudioItem={moveAudio}
         onTrimAudioItem={trimAudio}
         onAudioVolumeChange={setAudioVolume}
+        onAddAudioTrack={addAudioTrack}
+        onRemoveAudioTrack={removeAudioTrack}
         textItems={textItems}
         selectedTextId={validSelectedTextId}
         onSelectTextItem={(id) => {
@@ -418,6 +747,7 @@ function App() {
           if (id !== null) {
             setSelectedItemId(null)
             setSelectedAudioItemId(null)
+            setSelectedTransitionId(null)
           }
           showTimeline()
         }}
@@ -437,6 +767,12 @@ function App() {
           }}
         />
       )}
+      <KeyboardShortcutsModal isOpen={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+      <ConfirmNewProjectModal
+        isOpen={confirmNewOpen}
+        onConfirm={startNewProject}
+        onCancel={() => setConfirmNewOpen(false)}
+      />
     </div>
   )
 }

@@ -92,6 +92,9 @@ export function TextLane({
         if (event.target === event.currentTarget) onSelectItem(null)
       }}
     >
+      <div className="track-badge text-lane-badge" title="Text Overlay Track">
+        <span>T1</span>
+      </div>
       {items.length === 0 && (
         <p className="empty track-hint">Click &ldquo;+ Title&rdquo; to add a text overlay.</p>
       )}

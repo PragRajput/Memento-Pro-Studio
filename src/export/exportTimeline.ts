@@ -13,11 +13,13 @@ import {
   getFirstEncodableAudioCodec,
   getFirstEncodableVideoCodec,
 } from 'mediabunny'
-import type { AudioCodec, InputAudioTrack, InputVideoTrack, VideoCodec } from 'mediabunny'
+import type { AudioCodec, InputAudioTrack, InputVideoTrack, VideoCodec, VideoSample } from 'mediabunny'
 import { drawTextOverlays } from '../textDraw.ts'
-import { locate } from '../timeline.ts'
-import type { AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem } from '../types.ts'
+import { clamp, locate } from '../timeline.ts'
+import { locateTransition } from '../transitionTimeline.ts'
+import type { AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition, TransitionType } from '../types.ts'
 import { outputSize, planFrames } from './plan.ts'
+import type { Size } from './plan.ts'
 
 
 export const EXPORT_FPS = 30
@@ -77,6 +79,7 @@ export async function exportTimeline(
   audioItems: readonly AudioTimelineItem[],
   audioClips: ReadonlyMap<string, AudioClip>,
   textItems: readonly TextOverlay[] = [],
+  transitions: readonly Transition[] = [],
   { signal, onProgress }: ExportOptions = {},
 ): Promise<ExportResult> {
   if (items.length === 0) throw new Error('Add clips to the timeline before exporting.')
@@ -167,24 +170,100 @@ export async function exportTimeline(
     }
 
     let framesDone = 0
-    for (const group of plan.items) {
-      const open = opened.get(items[group.itemIndex].clipId)!
-      const timestamps = group.sourceTimes.map((time) => time + FRAME_EPSILON)
-      let frame = group.firstFrame
-      for await (const sample of new VideoSampleSink(open.video).samplesAtTimestamps(timestamps)) {
-        context.fillStyle = '#000'
-        context.fillRect(0, 0, size.width, size.height)
-        if (sample !== null) {
-          try {
-            sample.drawWithFit(context, { fit: 'contain' })
-          } finally {
-            sample.close()
+    if (transitions.length === 0) {
+      for (const group of plan.items) {
+        const open = opened.get(items[group.itemIndex].clipId)!
+        const timestamps = group.sourceTimes.map((time) => time + FRAME_EPSILON)
+        let frame = group.firstFrame
+        for await (const sample of new VideoSampleSink(open.video).samplesAtTimestamps(timestamps)) {
+          context.fillStyle = '#000'
+          context.fillRect(0, 0, size.width, size.height)
+          if (sample !== null) {
+            try {
+              sample.drawWithFit(context, { fit: 'contain' })
+            } finally {
+              sample.close()
+            }
+          }
+          drawTextOverlays(context, textItems, frame / EXPORT_FPS, size)
+          signal?.throwIfAborted()
+          await videoSource.add(frame / EXPORT_FPS, 1 / EXPORT_FPS)
+          frame += 1
+          framesDone += 1
+          report('Rendering video', 0.1 + 0.88 * (framesDone / plan.frameCount))
+        }
+      }
+    } else {
+      // Transition-aware rendering: collect monotonic timestamps needed from each clip
+      const clipTimestamps = new Map<string, number[]>()
+      for (const item of items) {
+        if (!clipTimestamps.has(item.clipId)) clipTimestamps.set(item.clipId, [])
+      }
+
+      for (let frame = 0; frame < plan.frameCount; frame++) {
+        const t = frame / EXPORT_FPS
+        const active = locateTransition(items, transitions, t)
+        if (active !== null) {
+          const listA = clipTimestamps.get(active.itemA.clipId)
+          if (listA) listA.push(active.sourceTimeA + FRAME_EPSILON)
+          const listB = clipTimestamps.get(active.itemB.clipId)
+          if (listB) listB.push(active.sourceTimeB + FRAME_EPSILON)
+        } else {
+          const pos = locate(items, t)
+          if (pos !== null) {
+            const item = items[pos.index]
+            const list = clipTimestamps.get(item.clipId)
+            if (list) list.push(item.inPoint + pos.offset + FRAME_EPSILON)
           }
         }
-        drawTextOverlays(context, textItems, frame / EXPORT_FPS, size)
+      }
+
+      const iterators = new Map<string, AsyncIterator<VideoSample | null>>()
+      for (const [clipId, times] of clipTimestamps.entries()) {
+        const open = opened.get(clipId)
+        if (open && times.length > 0) {
+          const sink = new VideoSampleSink(open.video)
+          iterators.set(clipId, sink.samplesAtTimestamps(times)[Symbol.asyncIterator]())
+        }
+      }
+
+      for (let frame = 0; frame < plan.frameCount; frame++) {
+        context.fillStyle = '#000'
+        context.fillRect(0, 0, size.width, size.height)
+
+        const t = frame / EXPORT_FPS
+        const active = locateTransition(items, transitions, t)
+
+        if (active !== null) {
+          const iterA = iterators.get(active.itemA.clipId)
+          const iterB = iterators.get(active.itemB.clipId)
+          const sampleA = iterA ? (await iterA.next()).value ?? null : null
+          const sampleB = iterB ? (await iterB.next()).value ?? null : null
+          try {
+            drawTransitionFrame(context, size, sampleA, sampleB, active.transition.type, active.progress)
+          } finally {
+            sampleA?.close()
+            sampleB?.close()
+          }
+        } else {
+          const pos = locate(items, t)
+          if (pos !== null) {
+            const item = items[pos.index]
+            const iter = iterators.get(item.clipId)
+            const sample = iter ? (await iter.next()).value ?? null : null
+            if (sample !== null) {
+              try {
+                sample.drawWithFit(context, { fit: 'contain' })
+              } finally {
+                sample.close()
+              }
+            }
+          }
+        }
+
+        drawTextOverlays(context, textItems, t, size)
         signal?.throwIfAborted()
-        await videoSource.add(frame / EXPORT_FPS, 1 / EXPORT_FPS)
-        frame += 1
+        await videoSource.add(t, 1 / EXPORT_FPS)
         framesDone += 1
         report('Rendering video', 0.1 + 0.88 * (framesDone / plan.frameCount))
       }
@@ -439,3 +518,52 @@ function videoCodecName(codec: VideoCodec): string {
 function audioCodecName(codec: AudioCodec): string {
   return AUDIO_CODEC_NAMES[codec] ?? codec
 }
+
+function drawTransitionFrame(
+  context: CanvasRenderingContext2D,
+  size: Size,
+  sampleA: VideoSample | null,
+  sampleB: VideoSample | null,
+  type: TransitionType,
+  progress: number,
+) {
+  if (type === 'crossfade') {
+    if (sampleA !== null) {
+      context.globalAlpha = 1.0
+      sampleA.drawWithFit(context, { fit: 'contain' })
+    }
+    if (sampleB !== null) {
+      context.globalAlpha = clamp(progress, 0, 1)
+      sampleB.drawWithFit(context, { fit: 'contain' })
+      context.globalAlpha = 1.0
+    }
+  } else if (type === 'fade-black') {
+    if (progress < 0.5) {
+      if (sampleA !== null) {
+        context.globalAlpha = clamp(1 - progress * 2, 0, 1)
+        sampleA.drawWithFit(context, { fit: 'contain' })
+        context.globalAlpha = 1.0
+      }
+    } else {
+      if (sampleB !== null) {
+        context.globalAlpha = clamp((progress - 0.5) * 2, 0, 1)
+        sampleB.drawWithFit(context, { fit: 'contain' })
+        context.globalAlpha = 1.0
+      }
+    }
+  } else if (type === 'wipe-left') {
+    if (sampleA !== null) {
+      context.globalAlpha = 1.0
+      sampleA.drawWithFit(context, { fit: 'contain' })
+    }
+    if (sampleB !== null) {
+      context.save()
+      context.beginPath()
+      context.rect(0, 0, size.width * clamp(progress, 0, 1), size.height)
+      context.clip()
+      sampleB.drawWithFit(context, { fit: 'contain' })
+      context.restore()
+    }
+  }
+}
+

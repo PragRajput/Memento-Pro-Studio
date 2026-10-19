@@ -3,12 +3,15 @@ import type { RefObject } from 'react'
 import { clamp, itemLength } from './timeline.ts'
 import type { AudioClip, AudioTimelineItem } from './types.ts'
 
-/** How far an audio element may drift from where it should be before reseeking it. */
-const RESYNC_TOLERANCE = 0.15
+interface PlayerEntry {
+  audio: HTMLAudioElement
+  clipId: string
+  isPlaying: boolean
+}
 
 /**
  * Plays multiple independent parallel audio items simultaneously over the timeline,
- * matching each item's individual volume, in-point, and placement.
+ * matching each item's individual volume, in-point, and placement without stuttering.
  */
 export function useAudioLanePlayback(
   _audioRef: RefObject<HTMLAudioElement | null>,
@@ -17,76 +20,123 @@ export function useAudioLanePlayback(
   time: number,
   playing: boolean,
 ) {
-  const elementsRef = useRef<Map<string, HTMLAudioElement>>(new Map())
-  const itemMap = useRef<Map<string, AudioTimelineItem>>(new Map())
+  const poolRef = useRef<Map<string, PlayerEntry>>(new Map())
 
   useEffect(() => {
-    itemMap.current = new Map(items.map((i) => [i.id, i]))
-  }, [items])
-
-  useEffect(() => {
+    const pool = poolRef.current
     const activeItems = items.filter((item) => {
-      const length = itemLength(item)
-      return time >= item.start && time < item.start + length
+      const len = itemLength(item)
+      return time >= item.start && time < item.start + len
     })
-    const activeIds = new Set(activeItems.map((item) => item.id))
+    const activeIds = new Set(activeItems.map((i) => i.id))
 
-    // Manage and update all active audio instances
+    // 1. Process all currently active audio items
     for (const item of activeItems) {
       const clip = clips.get(item.clipId)
       if (!clip) continue
 
-      let audio = elementsRef.current.get(item.id)
-      const isNew = !audio
-      if (!audio) {
-        audio = new Audio()
+      let entry = pool.get(item.id)
+      const expectedTime = item.inPoint + Math.max(0, time - item.start)
+
+      if (!entry) {
+        const audio = new Audio()
         audio.preload = 'auto'
-        elementsRef.current.set(item.id, audio)
-      }
-
-      if (audio.src !== clip.url) {
         audio.src = clip.url
-      }
+        audio.volume = clamp(item.volume, 0, 1)
 
-      const expected = item.inPoint + (time - item.start)
-      try {
-        if (isNew || Math.abs(audio.currentTime - expected) > RESYNC_TOLERANCE) {
-          audio.currentTime = Math.max(0, expected)
+        const seekWhenReady = () => {
+          try {
+            audio.currentTime = expectedTime
+          } catch {
+            // will retry
+          }
         }
-      } catch {
-        // Media still initializing; will sync on next frame
+
+        if (audio.readyState >= 1) {
+          seekWhenReady()
+        } else {
+          audio.addEventListener('loadedmetadata', seekWhenReady, { once: true })
+        }
+
+        entry = {
+          audio,
+          clipId: item.clipId,
+          isPlaying: false,
+        }
+        pool.set(item.id, entry)
       }
 
+      const { audio } = entry
+
+      // Update source if clip changed
+      if (entry.clipId !== item.clipId || audio.src !== clip.url) {
+        audio.src = clip.url
+        entry.clipId = item.clipId
+        entry.isPlaying = false
+      }
+
+      // Always update live volume for this item
       audio.volume = clamp(item.volume, 0, 1)
 
       if (playing) {
-        audio.play().catch(ignoreInterruptedPlay)
+        if (!entry.isPlaying || audio.paused) {
+          // Playback just started or item was just entered: sync position and start
+          try {
+            audio.currentTime = expectedTime
+          } catch {
+            // will catch up
+          }
+          audio.play().catch(ignoreInterruptedPlay)
+          entry.isPlaying = true
+        } else if (Math.abs(audio.currentTime - expectedTime) > 0.3) {
+          // Already playing: resync if drift is noticeable (> 0.3s) without causing audio jitter
+          try {
+            audio.currentTime = expectedTime
+          } catch {
+            // ignore
+          }
+        }
       } else {
-        audio.pause()
+        // Paused: ensure element is paused and update frame position for scrubbing
+        if (entry.isPlaying) {
+          audio.pause()
+          entry.isPlaying = false
+        }
+        if (audio.readyState >= 1 && Math.abs(audio.currentTime - expectedTime) > 0.05) {
+          try {
+            audio.currentTime = expectedTime
+          } catch {
+            // ignore
+          }
+        }
       }
     }
 
-    // Pause inactive audio elements and clean up removed items
-    for (const [id, audio] of elementsRef.current.entries()) {
+    // 2. Pause and clean up any audio items that are no longer active
+    for (const [id, entry] of pool.entries()) {
       if (!activeIds.has(id)) {
-        audio.pause()
-        if (!itemMap.current.has(id)) {
-          audio.src = ''
-          elementsRef.current.delete(id)
+        if (entry.isPlaying) {
+          entry.audio.pause()
+          entry.isPlaying = false
+        }
+        // If the item was deleted from the timeline completely, dispose the element
+        if (!items.some((i) => i.id === id)) {
+          entry.audio.src = ''
+          pool.delete(id)
         }
       }
     }
   }, [items, clips, time, playing])
 
-  // Stop all playback when component unmounts
+  // Cleanup on unmount
   useEffect(() => {
-    const elements = elementsRef.current
+    const pool = poolRef.current
     return () => {
-      for (const audio of elements.values()) {
-        audio.pause()
-        audio.src = ''
+      for (const entry of pool.values()) {
+        entry.audio.pause()
+        entry.audio.src = ''
       }
-      elements.clear()
+      pool.clear()
     }
   }, [])
 }

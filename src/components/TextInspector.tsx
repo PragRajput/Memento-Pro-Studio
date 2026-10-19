@@ -51,154 +51,178 @@ export function TextInspector({ item, onChange, onDelete, onClose }: TextInspect
   }
   const setColor = (color: string) => onChange({ ...item, color })
   const setBackground = (backgroundColor: string) => onChange({ ...item, backgroundColor })
-  const setPreset = (preset: typeof POSITION_PRESETS[number]) =>
+  const setPreset = (preset: (typeof POSITION_PRESETS)[number]) =>
     onChange({ ...item, x: preset.x, y: preset.y, position: preset.position })
 
   return (
-    <div className="text-inspector" role="region" aria-label="Title inspector">
-      <div className="inspector-field text-input-field">
-        <label htmlFor="title-text-input">Text</label>
-        <input
-          id="title-text-input"
-          type="text"
-          value={item.text}
-          placeholder="Title text…"
-          onChange={(event) => onChange({ ...item, text: event.target.value })}
-          autoFocus
-        />
-      </div>
-
-      <div className="inspector-field">
-        <label htmlFor="title-font-select">Font Style</label>
-        <select
-          id="title-font-select"
-          className="font-select"
-          value={currentFont}
-          onChange={(event) => setFont(event.target.value)}
-        >
-          {STYLISH_FONTS.map((font) => (
-            <option key={font.id} value={font.id} style={{ fontFamily: font.family }}>
-              {font.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="inspector-field">
-        <div className="field-header">
-          <span className="field-label">Size</span>
-          <span className="field-value">{currentFontSize}px</span>
+    <div className="inspector-panel text-inspector" role="region" aria-label="Title inspector">
+      <div className="inspector-header">
+        <div className="inspector-title-group">
+          <span className="inspector-icon" aria-hidden="true">T</span>
+          <h3>Title Overlay</h3>
         </div>
-        <div className="size-slider-row">
-          <input
-            type="range"
-            min={18}
-            max={120}
-            step={1}
-            value={currentFontSize}
-            onChange={(event) => setFontSize(Number(event.target.value))}
-          />
-          <div className="segmented-control mini">
-            {[
-              { label: 'S', val: 32 },
-              { label: 'M', val: 48 },
-              { label: 'L', val: 72 },
-              { label: 'XL', val: 96 },
-            ].map(({ label, val }) => (
-              <button
-                key={label}
-                type="button"
-                className={currentFontSize === val ? 'active' : ''}
-                onClick={() => setFontSize(val)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="inspector-field">
-        <div className="field-header">
-          <span className="field-label">Position Presets</span>
-          <span className="drag-hint">💡 Or drag on video</span>
-        </div>
-        <div className="segmented-control wrap">
-          {POSITION_PRESETS.map((p) => {
-            const active = (item.x === p.x && item.y === p.y) || (!item.x && item.position === p.position && p.x === 50)
-            return (
-              <button
-                key={p.label}
-                type="button"
-                className={active ? 'active' : ''}
-                onClick={() => setPreset(p)}
-              >
-                {p.label}
-              </button>
-            )
-          })}
-        </div>
-      </div>
-
-      <div className="inspector-field">
-        <span className="field-label">Background</span>
-        <div className="segmented-control">
-          {BACKGROUND_OPTIONS.map((bg) => (
-            <button
-              key={bg.id}
-              type="button"
-              className={currentBg === bg.id ? 'active' : ''}
-              onClick={() => setBackground(bg.id)}
-            >
-              {bg.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="inspector-field color-field">
-        <span className="field-label">Color</span>
-        <div className="color-picker-group">
-          <input
-            type="color"
-            aria-label="Custom color"
-            value={item.color}
-            onChange={(event) => setColor(event.target.value)}
-          />
-          <div className="color-swatches">
-            {COLOR_SWATCHES.map((swatch) => (
-              <button
-                key={swatch}
-                type="button"
-                className={`swatch${item.color.toLowerCase() === swatch ? ' active' : ''}`}
-                style={{ backgroundColor: swatch }}
-                aria-label={swatch}
-                onClick={() => setColor(swatch)}
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="inspector-actions">
         <button
           type="button"
-          className="delete-button"
-          onClick={() => onDelete(item.id)}
-          title="Delete title"
-        >
-          Delete
-        </button>
-        <button
-          type="button"
-          className="close-button"
+          className="inspector-close-btn"
           onClick={onClose}
-          aria-label="Close title inspector"
+          aria-label="Close inspector"
+          title="Close inspector"
         >
           ×
+        </button>
+      </div>
+
+      <div className="inspector-body">
+        {/* Text Input */}
+        <div className="inspector-group">
+          <label className="group-label" htmlFor="title-text-input">Text Content</label>
+          <input
+            id="title-text-input"
+            type="text"
+            className="inspector-input text-content-input"
+            value={item.text}
+            placeholder="Type overlay text…"
+            onChange={(event) => onChange({ ...item, text: event.target.value })}
+            autoFocus
+          />
+        </div>
+
+        {/* Font Style */}
+        <div className="inspector-group">
+          <label className="group-label" htmlFor="title-font-select">Typography</label>
+          <select
+            id="title-font-select"
+            className="inspector-select"
+            value={currentFont}
+            onChange={(event) => setFont(event.target.value)}
+          >
+            {STYLISH_FONTS.map((font) => (
+              <option key={font.id} value={font.id} style={{ fontFamily: font.family }}>
+                {font.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Font Size */}
+        <div className="inspector-group">
+          <div className="group-header-row">
+            <span className="group-label">Size</span>
+            <span className="group-value-badge">{currentFontSize}px</span>
+          </div>
+          <div className="slider-with-presets">
+            <input
+              type="range"
+              className="inspector-slider"
+              min={18}
+              max={120}
+              step={1}
+              value={currentFontSize}
+              onChange={(event) => setFontSize(Number(event.target.value))}
+            />
+            <div className="segmented-control mini">
+              {[
+                { label: 'S', val: 32 },
+                { label: 'M', val: 48 },
+                { label: 'L', val: 72 },
+                { label: 'XL', val: 96 },
+              ].map(({ label, val }) => (
+                <button
+                  key={label}
+                  type="button"
+                  className={currentFontSize === val ? 'active' : ''}
+                  onClick={() => setFontSize(val)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Position Presets */}
+        <div className="inspector-group">
+          <div className="group-header-row">
+            <span className="group-label">Position Presets</span>
+            <span className="drag-hint">💡 Drag on preview canvas</span>
+          </div>
+          <div className="segmented-control wrap-control">
+            {POSITION_PRESETS.map((p) => {
+              const active =
+                (item.x === p.x && item.y === p.y) ||
+                (!item.x && item.position === p.position && p.x === 50)
+              return (
+                <button
+                  key={p.label}
+                  type="button"
+                  className={active ? 'active' : ''}
+                  onClick={() => setPreset(p)}
+                >
+                  {p.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Background */}
+        <div className="inspector-group">
+          <span className="group-label">Background Banner</span>
+          <div className="segmented-control">
+            {BACKGROUND_OPTIONS.map((bg) => (
+              <button
+                key={bg.id}
+                type="button"
+                className={currentBg === bg.id ? 'active' : ''}
+                onClick={() => setBackground(bg.id)}
+              >
+                {bg.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Color Palette */}
+        <div className="inspector-group">
+          <span className="group-label">Text Color</span>
+          <div className="color-control-row">
+            <input
+              type="color"
+              aria-label="Custom color picker"
+              className="native-color-picker"
+              value={item.color}
+              onChange={(event) => setColor(event.target.value)}
+            />
+            <div className="swatch-list">
+              {COLOR_SWATCHES.map((swatch) => (
+                <button
+                  key={swatch}
+                  type="button"
+                  className={`swatch-btn${item.color.toLowerCase() === swatch ? ' active' : ''}`}
+                  style={{ backgroundColor: swatch }}
+                  aria-label={swatch}
+                  onClick={() => setColor(swatch)}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="inspector-footer">
+        <button
+          type="button"
+          className="inspector-delete-btn"
+          onClick={() => onDelete(item.id)}
+          title="Delete this title overlay"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          </svg>
+          Delete Title
         </button>
       </div>
     </div>
   )
 }
-

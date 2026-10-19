@@ -1,7 +1,9 @@
 import type { RefObject } from 'react'
 import type { MediaSelection } from './MediaBin.tsx'
+import { AudioInspector } from './AudioInspector.tsx'
 import { TextInspector } from './TextInspector.tsx'
-import type { AudioClip, MediaClip, TextOverlay } from '../types.ts'
+import { TransitionInspector } from './TransitionInspector.tsx'
+import type { AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition } from '../types.ts'
 
 interface PreviewProps {
   selection: MediaSelection
@@ -10,6 +12,7 @@ interface PreviewProps {
   timelineEmpty: boolean
   hasVideo: boolean
   timelineVideoRef: RefObject<HTMLVideoElement | null>
+  secondaryVideoRef?: RefObject<HTMLVideoElement | null>
   timelineAudioRef: RefObject<HTMLAudioElement | null>
   textItems: TextOverlay[]
   selectedTextId: string | null
@@ -17,6 +20,20 @@ interface PreviewProps {
   onSelectText: (id: string | null) => void
   onUpdateText: (updated: TextOverlay) => void
   onDeleteText: (id: string) => void
+  selectedAudioItem?: AudioTimelineItem | null
+  selectedAudioClipName?: string
+  audioTrackCount?: number
+  onAudioVolumeChange?: (id: string, volume: number) => void
+  onMoveAudioToTrack?: (id: string, trackIndex: number) => void
+  onDeleteAudioItem?: (id: string) => void
+  onCloseAudioInspector?: () => void
+  selectedTransition?: Transition | null
+  selectedTransitionItemA?: TimelineItem | null
+  selectedTransitionItemB?: TimelineItem | null
+  selectedTransitionMaxDuration?: number
+  onUpdateTransition?: (updated: Transition) => void
+  onDeleteTransition?: (id: string) => void
+  onCloseTransitionInspector?: () => void
 }
 
 export function Preview({
@@ -26,6 +43,7 @@ export function Preview({
   timelineEmpty,
   hasVideo,
   timelineVideoRef,
+  secondaryVideoRef,
   timelineAudioRef,
   textItems,
   selectedTextId,
@@ -33,11 +51,31 @@ export function Preview({
   onSelectText,
   onUpdateText,
   onDeleteText,
+  selectedAudioItem,
+  selectedAudioClipName,
+  audioTrackCount = 2,
+  onAudioVolumeChange,
+  onMoveAudioToTrack,
+  onDeleteAudioItem,
+  onCloseAudioInspector,
+  selectedTransition,
+  selectedTransitionItemA,
+  selectedTransitionItemB,
+  selectedTransitionMaxDuration = 3,
+  onUpdateTransition,
+  onDeleteTransition,
+  onCloseTransitionInspector,
 }: PreviewProps) {
   const videoClip = selection?.kind === 'video' ? videoClips.get(selection.id) : undefined
   const audioClip = selection?.kind === 'audio' ? audioClips.get(selection.id) : undefined
   const showingTimeline = videoClip === undefined && audioClip === undefined
   const selectedText = textItems.find((item) => item.id === selectedTextId)
+
+  const hasInspector = Boolean(
+    selectedText ||
+    (selectedAudioItem && onAudioVolumeChange && onMoveAudioToTrack && onDeleteAudioItem && onCloseAudioInspector) ||
+    (selectedTransition && onUpdateTransition && onDeleteTransition && onCloseTransitionInspector)
+  )
 
   // Show active overlays at current playhead time, plus the currently selected overlay for live editing
   const visibleTexts = textItems.filter(
@@ -81,79 +119,157 @@ export function Preview({
   }
 
   return (
-    <section className="panel preview" aria-label="Preview">
-      <p className="preview-label">
-        {videoClip ? `Clip: ${videoClip.name}` : audioClip ? `Clip: ${audioClip.name}` : 'Timeline'}
-      </p>
-      {videoClip && <video key={videoClip.id} src={videoClip.url} controls />}
-      {audioClip && (
-        <div className="audio-preview">
-          <span className="clip-icon" aria-hidden="true">
-            ♪
-          </span>
-          <audio key={audioClip.id} src={audioClip.url} controls />
-        </div>
-      )}
-
-      {/* Timeline preview stage */}
-      <div className="preview-stage" hidden={!showingTimeline || timelineEmpty}>
-        {hasVideo ? (
-          <video ref={timelineVideoRef} />
-        ) : (
-          <div className="audio-timeline-banner">
-            <span className="clip-icon" aria-hidden="true">
-              ♪
+    <section className={`panel preview${hasInspector ? ' has-inspector' : ''}`} aria-label="Preview Monitor">
+      <div className="preview-viewport">
+        {/* Top Monitor Bar */}
+        <div className="preview-monitor-header">
+          <div className="monitor-badge">
+            <span className="live-dot" />
+            <span className="monitor-label">
+              {videoClip ? `Source: ${videoClip.name}` : audioClip ? `Audio: ${audioClip.name}` : 'Program Monitor'}
             </span>
-            <p>Audio playback active</p>
           </div>
-        )}
-        <div className="preview-overlay">
-          {visibleTexts.map((title) => {
-            const posX = title.x ?? 50
-            const posY = title.y ?? (title.position === 'top' ? 15 : title.position === 'center' ? 50 : 85)
-            const fontSize = title.fontSize ?? (title.size === 'small' ? 28 : title.size === 'large' ? 68 : 44)
-            const fontFamily = title.fontFamily ? `"${title.fontFamily}", sans-serif` : 'Inter, sans-serif'
-            const isSelected = title.id === selectedTextId
+          {videoClip && (
+            <span className="monitor-meta">
+              {videoClip.width}×{videoClip.height}
+            </span>
+          )}
+        </div>
 
-            return (
-              <div
-                key={title.id}
-                className={`title-overlay${isSelected ? ' selected' : ''}`}
-                style={{
-                  left: `${posX}%`,
-                  top: `${posY}%`,
-                  fontSize: `${fontSize}px`,
-                  fontFamily,
-                  color: title.color,
-                  backgroundColor: title.backgroundColor && title.backgroundColor !== 'transparent' ? title.backgroundColor : undefined,
-                }}
-                title="Click and drag to position anywhere on screen"
-                onPointerDown={(event) => beginTitleDrag(event, title)}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  onSelectText(title.id)
-                }}
-              >
-                {title.text}
+        {/* Canvas Stage */}
+        <div className="preview-canvas-wrapper">
+          {videoClip && (
+            <video key={videoClip.id} src={videoClip.url} controls className="preview-source-video" />
+          )}
+
+          {audioClip && (
+            <div className="audio-preview">
+              <div className="audio-viz-ring static">
+                <span className="clip-icon-large" aria-hidden="true">♪</span>
               </div>
-            )
-          })}
+              <p className="audio-preview-name">{audioClip.name}</p>
+              <audio key={audioClip.id} src={audioClip.url} controls />
+            </div>
+          )}
+
+          {/* Timeline preview stage */}
+          <div className="preview-stage" hidden={!showingTimeline || timelineEmpty}>
+            {hasVideo ? (
+              <>
+                <video ref={timelineVideoRef} className="preview-video primary" />
+                <video
+                  ref={secondaryVideoRef}
+                  className="preview-video secondary"
+                  style={{ display: 'none' }}
+                />
+              </>
+            ) : (
+              <div className="audio-timeline-banner">
+                <div className="audio-viz-ring">
+                  <div className="audio-viz-bars">
+                    <span className="viz-bar" />
+                    <span className="viz-bar" />
+                    <span className="viz-bar" />
+                    <span className="viz-bar" />
+                    <span className="viz-bar" />
+                  </div>
+                  <span className="audio-viz-icon" aria-hidden="true">♪</span>
+                </div>
+                <p className="audio-viz-label">Audio Playback</p>
+                <p className="audio-viz-sub">No video track — playing audio timeline</p>
+              </div>
+            )}
+
+            <div className="preview-overlay">
+              {visibleTexts.map((title) => {
+                const posX = title.x ?? 50
+                const posY = title.y ?? (title.position === 'top' ? 15 : title.position === 'center' ? 50 : 85)
+                const fontSize = title.fontSize ?? (title.size === 'small' ? 28 : title.size === 'large' ? 68 : 44)
+                const fontFamily = title.fontFamily ? `"${title.fontFamily}", sans-serif` : 'Inter, sans-serif'
+                const isSelected = title.id === selectedTextId
+
+                return (
+                  <div
+                    key={title.id}
+                    className={`title-overlay${isSelected ? ' selected' : ''}`}
+                    style={{
+                      left: `${posX}%`,
+                      top: `${posY}%`,
+                      fontSize: `${fontSize}px`,
+                      fontFamily,
+                      color: title.color,
+                      backgroundColor:
+                        title.backgroundColor && title.backgroundColor !== 'transparent'
+                          ? title.backgroundColor
+                          : undefined,
+                    }}
+                    title="Click and drag to position anywhere on screen"
+                    onPointerDown={(event) => beginTitleDrag(event, title)}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onSelectText(title.id)
+                    }}
+                  >
+                    {title.text}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {showingTimeline && timelineEmpty && (
+            <div className="preview-empty-state">
+              <div className="empty-icon-group">
+                <span className="empty-icon">🎬</span>
+              </div>
+              <p className="empty-title">Timeline is Empty</p>
+              <p className="empty-desc">
+                Import videos or audio into the Media Pool, then add them to the timeline to begin editing.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
-      <audio ref={timelineAudioRef} hidden />
-      {showingTimeline && timelineEmpty && (
-        <p className="empty">Add clips to the timeline, or select a clip to preview it.</p>
+      {/* Docked Inspector Sidebar (Does not obscure video canvas!) */}
+      {hasInspector && (
+        <aside className="preview-inspector-dock">
+          {selectedText && (
+            <TextInspector
+              item={selectedText}
+              onChange={onUpdateText}
+              onDelete={onDeleteText}
+              onClose={() => onSelectText(null)}
+            />
+          )}
+
+          {selectedAudioItem && onAudioVolumeChange && onMoveAudioToTrack && onDeleteAudioItem && onCloseAudioInspector && (
+            <AudioInspector
+              item={selectedAudioItem}
+              clipName={selectedAudioClipName ?? 'Audio clip'}
+              trackCount={audioTrackCount}
+              onVolumeChange={onAudioVolumeChange}
+              onMoveToTrack={onMoveAudioToTrack}
+              onDelete={onDeleteAudioItem}
+              onClose={onCloseAudioInspector}
+            />
+          )}
+
+          {selectedTransition && onUpdateTransition && onDeleteTransition && onCloseTransitionInspector && (
+            <TransitionInspector
+              transition={selectedTransition}
+              clipAName={videoClips.get(selectedTransitionItemA?.clipId ?? '')?.name ?? 'Clip A'}
+              clipBName={videoClips.get(selectedTransitionItemB?.clipId ?? '')?.name ?? 'Clip B'}
+              maxDuration={selectedTransitionMaxDuration}
+              onChange={onUpdateTransition}
+              onDelete={onDeleteTransition}
+              onClose={onCloseTransitionInspector}
+            />
+          )}
+        </aside>
       )}
 
-      {selectedText && (
-        <TextInspector
-          item={selectedText}
-          onChange={onUpdateText}
-          onDelete={onDeleteText}
-          onClose={() => onSelectText(null)}
-        />
-      )}
+      <audio ref={timelineAudioRef} hidden />
     </section>
   )
 }

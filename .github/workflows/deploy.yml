@@ -36,6 +36,9 @@ jobs:
       - name: Run linter
         run: npm run lint
 
+      - name: Run unit tests
+        run: npm test
+
       - name: Build application
         run: npm run build
 
@@ -50,3 +53,4 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+

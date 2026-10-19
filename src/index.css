@@ -1,17 +1,49 @@
 :root {
-  --bg: #121316;
-  --panel: #1b1d22;
-  --panel-border: #2a2d34;
-  --text: #e6e7ea;
-  --text-muted: #8b8f98;
-  --accent: #4f8cff;
-  --danger: #ff6b6b;
+  --bg: #0c0e12;
+  --panel: #14171d;
+  --panel-elevated: #1a1e26;
+  --panel-header: #171a22;
+  --panel-border: #232833;
+  --panel-border-subtle: #1c202a;
+  --panel-border-focus: #3b82f6;
+
+  --text: #f1f3f7;
+  --text-muted: #8e95a5;
+  --text-dim: #5c6373;
+
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --accent-glow: rgba(59, 130, 246, 0.25);
+  --accent-purple: #8b5cf6;
+  --accent-purple-glow: rgba(139, 92, 246, 0.25);
+
+  --danger: #ef4444;
+  --danger-hover: #dc2626;
+  --danger-bg: rgba(239, 68, 68, 0.15);
+
+  --success: #10b981;
+  --success-bg: rgba(16, 185, 129, 0.15);
+
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.65);
+
+  --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 
   color-scheme: dark;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  font-size: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Inter', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
   color: var(--text);
   background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 *,
@@ -20,12 +52,20 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
+  overflow: hidden;
+  user-select: none;
 }
 
 h1,
-h2 {
+h2,
+h3,
+p {
   margin: 0;
 }
 
@@ -33,4 +73,39 @@ button {
   font: inherit;
   color: inherit;
   cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  transition: all var(--transition-fast);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
 }

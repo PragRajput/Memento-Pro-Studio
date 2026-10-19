@@ -18,6 +18,8 @@ interface AudioLaneProps {
   maxEnd: number
   trackIndex?: number
   trackLabel?: string
+  canRemoveTrack?: boolean
+  onRemoveTrack?: (trackIndex: number) => void
   onSelectItem: (id: string | null) => void
   onAddClip: (clipId: string, desiredStart: number, trackIndex: number) => void
   onMoveItem: (id: string, start: number) => void
@@ -33,6 +35,8 @@ export function AudioLane({
   maxEnd,
   trackIndex = 0,
   trackLabel,
+  canRemoveTrack,
+  onRemoveTrack,
   onSelectItem,
   onAddClip,
   onMoveItem,
@@ -142,7 +146,20 @@ export function AudioLane({
       onDrop={handleDrop}
     >
       <div className="track-badge audio-badge" title={`Audio Track ${trackIndex + 1}`}>
-        {label}
+        <span>{label}</span>
+        {canRemoveTrack && onRemoveTrack && laneItems.length === 0 && (
+          <button
+            type="button"
+            className="remove-track-btn"
+            title={`Remove ${label}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              onRemoveTrack(trackIndex)
+            }}
+          >
+            ×
+          </button>
+        )}
       </div>
       {laneItems.length === 0 && (
         <p className="empty track-hint">Drag audio here for {label} (parallel playback supported).</p>
@@ -162,21 +179,24 @@ export function AudioLane({
           >
             <span className="item-label">{clip?.name}</span>
             <div className="audio-item-controls" onPointerDown={(event) => event.stopPropagation()}>
-              <span className="volume-label" title={`Volume: ${volPercent}%`}>
+              <button
+                type="button"
+                className="volume-toggle-btn"
+                title={item.volume === 0 ? 'Click to unmute' : 'Click to mute'}
+                onClick={() => onVolumeChange(item.id, item.volume === 0 ? 1 : 0)}
+              >
                 {item.volume === 0 ? '🔇' : '🔊'} {volPercent}%
-              </span>
-              {item.id === selectedItemId && (
-                <input
-                  type="range"
-                  className="volume-slider"
-                  aria-label="Volume"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={item.volume}
-                  onChange={(event) => onVolumeChange(item.id, Number(event.target.value))}
-                />
-              )}
+              </button>
+              <input
+                type="range"
+                className="volume-slider"
+                aria-label="Volume"
+                min={0}
+                max={1}
+                step={0.01}
+                value={item.volume}
+                onChange={(event) => onVolumeChange(item.id, Number(event.target.value))}
+              />
             </div>
             <div
               className="trim-handle in"

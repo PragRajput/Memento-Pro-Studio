@@ -42,6 +42,21 @@ export interface TimelineItem extends SourceRange {
   muted: boolean
 }
 
+export type TransitionType = 'crossfade' | 'fade-black' | 'wipe-left'
+
+/** A transition between two adjacent video clips on the timeline. */
+export interface Transition {
+  id: string
+  /** The timeline item ID before the cut. */
+  fromItemId: string
+  /** The timeline item ID after the cut. */
+  toItemId: string
+  /** Type of blend effect. */
+  type: TransitionType
+  /** Duration of the transition in seconds (typically 0.5s to 2.0s). */
+  duration: number
+}
+
 /**
  * One piece of an audio clip placed on the audio track, at an explicit timeline
  * position. Unlike video items, audio items do not auto-sequence: they can leave

@@ -22,6 +22,8 @@ interface MediaBinProps {
   onAddAudioToTimeline: (id: string) => void
 }
 
+type MediaFilter = 'all' | 'video' | 'audio'
+
 export function MediaBin({
   clips,
   audioClips,
@@ -38,6 +40,7 @@ export function MediaBin({
 }: MediaBinProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
+  const [filter, setFilter] = useState<MediaFilter>('all')
 
   const handleDragOver = (event: DragEvent) => {
     // Only files from the computer import here; clips dragged to a track pass through.
@@ -57,17 +60,33 @@ export function MediaBin({
     onImport(Array.from(event.dataTransfer.files))
   }
 
+  const totalClips = clips.length + audioClips.length
+  const showVideo = filter === 'all' || filter === 'video'
+  const showAudio = filter === 'all' || filter === 'audio'
+
   return (
     <section
       className={`panel media-bin${dragging ? ' dragging' : ''}`}
-      aria-label="Media"
+      aria-label="Media Bin"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <header className="panel-header">
-        <h2>Media</h2>
-        <button type="button" onClick={() => inputRef.current?.click()}>
+      <header className="panel-header media-bin-header">
+        <div className="panel-title-group">
+          <h2>Media Pool</h2>
+          <span className="media-count-badge">{totalClips}</span>
+        </div>
+        <button
+          type="button"
+          className="import-btn"
+          onClick={() => inputRef.current?.click()}
+          title="Import video or audio files from your computer"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
           Import
         </button>
         <input
@@ -84,103 +103,185 @@ export function MediaBin({
         />
       </header>
 
-      {importing > 0 && <p className="status">Importing {importing} file(s)…</p>}
+      {/* Filter Tabs */}
+      {totalClips > 0 && (
+        <div className="media-filter-bar">
+          <button
+            type="button"
+            className={`filter-tab${filter === 'all' ? ' active' : ''}`}
+            onClick={() => setFilter('all')}
+          >
+            All <span className="tab-count">{totalClips}</span>
+          </button>
+          <button
+            type="button"
+            className={`filter-tab${filter === 'video' ? ' active' : ''}`}
+            onClick={() => setFilter('video')}
+          >
+            Video <span className="tab-count">{clips.length}</span>
+          </button>
+          <button
+            type="button"
+            className={`filter-tab${filter === 'audio' ? ' active' : ''}`}
+            onClick={() => setFilter('audio')}
+          >
+            Audio <span className="tab-count">{audioClips.length}</span>
+          </button>
+        </div>
+      )}
+
+      {importing > 0 && (
+        <div className="import-status-bar">
+          <span className="spinner" />
+          <span>Importing {importing} file(s)…</span>
+        </div>
+      )}
+
       {errors.map((error, index) => (
-        <p key={index} className="error">
-          {error}
-        </p>
+        <div key={index} className="error-notice">
+          <span className="error-icon">⚠</span>
+          <span>{error}</span>
+        </div>
       ))}
 
-      {clips.length === 0 && audioClips.length === 0 && importing === 0 ? (
-        <p className="empty">Drop video or audio files here, or click Import.</p>
+      {totalClips === 0 && importing === 0 ? (
+        <div className="media-empty-dropzone" onClick={() => inputRef.current?.click()}>
+          <div className="dropzone-icon-box">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+          </div>
+          <p className="dropzone-title">Drop media here</p>
+          <p className="dropzone-subtitle">or click to browse your files</p>
+          <div className="dropzone-tags">
+            <span>MP4</span>
+            <span>WebM</span>
+            <span>MP3</span>
+            <span>WAV</span>
+          </div>
+        </div>
       ) : (
         <ul className="clip-list">
-          {clips.map((clip) => {
-            const placeable = Number.isFinite(clip.duration)
-            const selected = selection?.kind === 'video' && selection.id === clip.id
-            return (
-              <li
-                key={clip.id}
-                className={selected ? 'selected' : undefined}
-                draggable={placeable}
-                onDragStart={(event) => {
-                  event.dataTransfer.setData(CLIP_DRAG_TYPE, clip.id)
-                  event.dataTransfer.effectAllowed = 'copy'
-                }}
-              >
-                <button type="button" className="clip" onClick={() => onSelectVideo(clip.id)}>
-                  <img src={clip.thumbnail} alt="" />
-                  <span className="clip-name" title={clip.name}>
-                    {clip.name}
-                  </span>
-                  <span className="clip-meta">
-                    {formatDuration(clip.duration)} · {clip.width}×{clip.height}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="remove"
-                  aria-label={`Remove ${clip.name}`}
-                  onClick={() => onRemoveVideo(clip.id)}
+          {showVideo &&
+            clips.map((clip) => {
+              const placeable = Number.isFinite(clip.duration)
+              const selected = selection?.kind === 'video' && selection.id === clip.id
+              return (
+                <li
+                  key={clip.id}
+                  className={`clip-item${selected ? ' selected' : ''}`}
+                  draggable={placeable}
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData(CLIP_DRAG_TYPE, clip.id)
+                    event.dataTransfer.effectAllowed = 'copy'
+                  }}
                 >
-                  ×
-                </button>
-                <button
-                  type="button"
-                  className="add"
-                  aria-label={`Add ${clip.name} to the video track`}
-                  title={placeable ? 'Add to the video track' : 'Clip length unknown'}
-                  disabled={!placeable}
-                  onClick={() => onAddVideoToTimeline(clip.id)}
-                >
-                  +
-                </button>
-              </li>
-            )
-          })}
-          {audioClips.map((clip) => {
-            const hasDuration = Number.isFinite(clip.duration) && clip.duration > 0
-            const selected = selection?.kind === 'audio' && selection.id === clip.id
-            return (
-              <li
-                key={clip.id}
-                className={selected ? 'selected' : undefined}
-                draggable
-                onDragStart={(event) => {
-                  event.dataTransfer.setData(AUDIO_DRAG_TYPE, clip.id)
-                  event.dataTransfer.effectAllowed = 'copy'
-                }}
-              >
-                <button type="button" className="clip audio-clip" onClick={() => onSelectAudio(clip.id)}>
-                  <span className="clip-icon" aria-hidden="true">
-                    ♪
-                  </span>
-                  <span className="clip-name" title={clip.name}>
-                    {clip.name}
-                  </span>
-                  <span className="clip-meta">{hasDuration ? formatDuration(clip.duration) : 'Audio'}</span>
-                </button>
-                <button
-                  type="button"
-                  className="remove"
-                  aria-label={`Remove ${clip.name}`}
-                  onClick={() => onRemoveAudio(clip.id)}
-                >
-                  ×
-                </button>
-                <button
-                  type="button"
-                  className="add"
-                  aria-label={`Add ${clip.name} to the audio track`}
-                  title="Add to the audio track"
-                  onClick={() => onAddAudioToTimeline(clip.id)}
-                >
-                  +
-                </button>
-              </li>
-            )
-          })}
+                  <button
+                    type="button"
+                    className="clip-card"
+                    onClick={() => onSelectVideo(clip.id)}
+                    title={`Click to preview: ${clip.name}`}
+                  >
+                    <div className="thumb-wrapper">
+                      <img src={clip.thumbnail} alt="" />
+                      <span className="thumb-duration">{formatDuration(clip.duration)}</span>
+                      <span className="media-type-tag video-tag">VIDEO</span>
+                    </div>
+                    <div className="clip-info">
+                      <span className="clip-name" title={clip.name}>
+                        {clip.name}
+                      </span>
+                      <span className="clip-meta">
+                        {clip.width}×{clip.height}
+                      </span>
+                    </div>
+                  </button>
 
+                  <div className="clip-actions">
+                    <button
+                      type="button"
+                      className="clip-btn add-btn"
+                      aria-label={`Add ${clip.name} to timeline`}
+                      title={placeable ? 'Add to Timeline (+)' : 'Duration unknown'}
+                      disabled={!placeable}
+                      onClick={() => onAddVideoToTimeline(clip.id)}
+                    >
+                      +
+                    </button>
+                    <button
+                      type="button"
+                      className="clip-btn remove-btn"
+                      aria-label={`Remove ${clip.name}`}
+                      title="Remove from pool"
+                      onClick={() => onRemoveVideo(clip.id)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                </li>
+              )
+            })}
+
+          {showAudio &&
+            audioClips.map((clip) => {
+              const hasDuration = Number.isFinite(clip.duration) && clip.duration > 0
+              const selected = selection?.kind === 'audio' && selection.id === clip.id
+              return (
+                <li
+                  key={clip.id}
+                  className={`clip-item${selected ? ' selected' : ''}`}
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData(AUDIO_DRAG_TYPE, clip.id)
+                    event.dataTransfer.effectAllowed = 'copy'
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="clip-card"
+                    onClick={() => onSelectAudio(clip.id)}
+                    title={`Click to preview: ${clip.name}`}
+                  >
+                    <div className="thumb-wrapper audio-thumb">
+                      <span className="audio-wave-icon" aria-hidden="true">♪</span>
+                      <span className="thumb-duration">
+                        {hasDuration ? formatDuration(clip.duration) : '--:--'}
+                      </span>
+                      <span className="media-type-tag audio-tag">AUDIO</span>
+                    </div>
+                    <div className="clip-info">
+                      <span className="clip-name" title={clip.name}>
+                        {clip.name}
+                      </span>
+                      <span className="clip-meta">Audio Track</span>
+                    </div>
+                  </button>
+
+                  <div className="clip-actions">
+                    <button
+                      type="button"
+                      className="clip-btn add-btn"
+                      aria-label={`Add ${clip.name} to timeline`}
+                      title="Add to Audio Track (+)"
+                      onClick={() => onAddAudioToTimeline(clip.id)}
+                    >
+                      +
+                    </button>
+                    <button
+                      type="button"
+                      className="clip-btn remove-btn"
+                      aria-label={`Remove ${clip.name}`}
+                      title="Remove from pool"
+                      onClick={() => onRemoveAudio(clip.id)}
+                    >
+                      ×
+                    </button>
+                  </div>
+                </li>
+              )
+            })}
         </ul>
       )}
     </section>

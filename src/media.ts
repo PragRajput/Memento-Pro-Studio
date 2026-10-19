@@ -32,13 +32,39 @@ export async function loadMedia(
 export async function loadClip(file: File): Promise<MediaClip> {
   const url = URL.createObjectURL(file)
   try {
+    let displayWidth = 0
+    let displayHeight = 0
+    let demuxerDuration = NaN
+
+    // Check demuxer for exact display dimensions (respects container rotation tags like iPhone portrait 90°)
+    try {
+      const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS })
+      const videoTrack = await input.getPrimaryVideoTrack()
+      if (videoTrack) {
+        displayWidth = await videoTrack.getDisplayWidth()
+        displayHeight = await videoTrack.getDisplayHeight()
+      }
+      const dur = await input.computeDuration()
+      if (Number.isFinite(dur) && dur > 0) demuxerDuration = dur
+      input.dispose()
+    } catch {
+      // demuxer fallback
+    }
+
     const video = document.createElement('video')
     video.preload = 'metadata'
     video.muted = true
     video.playsInline = true
     video.src = url
     await waitFor(video, 'loadedmetadata')
-    const duration = await resolveDuration(video)
+    const duration =
+      Number.isFinite(demuxerDuration) && demuxerDuration > 0
+        ? demuxerDuration
+        : await resolveDuration(video)
+
+    const finalWidth = displayWidth > 0 ? displayWidth : video.videoWidth
+    const finalHeight = displayHeight > 0 ? displayHeight : video.videoHeight
+
     // The very first frame is often black, so sample slightly later.
     video.currentTime = Math.min(1, Number.isFinite(duration) ? duration / 2 : 0)
     await waitFor(video, 'seeked')
@@ -49,9 +75,9 @@ export async function loadClip(file: File): Promise<MediaClip> {
       file,
       url,
       duration,
-      width: video.videoWidth,
-      height: video.videoHeight,
-      thumbnail: captureFrame(video),
+      width: finalWidth,
+      height: finalHeight,
+      thumbnail: captureFrame(video, finalWidth, finalHeight),
     }
   } catch (error) {
     URL.revokeObjectURL(url)
@@ -145,9 +171,14 @@ function waitFor(media: HTMLMediaElement, event: 'loadedmetadata' | 'seeked'): P
   })
 }
 
-function captureFrame(video: HTMLVideoElement): string {
+function captureFrame(video: HTMLVideoElement, width?: number, height?: number): string {
   const canvas = document.createElement('canvas')
-  const aspect = video.videoWidth > 0 ? video.videoHeight / video.videoWidth : 9 / 16
+  const aspect =
+    width && height && width > 0
+      ? height / width
+      : video.videoWidth > 0
+        ? video.videoHeight / video.videoWidth
+        : 9 / 16
   canvas.width = THUMBNAIL_WIDTH
   canvas.height = Math.max(1, Math.round(THUMBNAIL_WIDTH * aspect))
   canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height)
