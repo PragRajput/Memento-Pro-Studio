@@ -18,7 +18,7 @@ import { Timeline } from './components/Timeline.tsx'
 import { outputSize } from './export/plan.ts'
 import { useExporter } from './export/useExporter.ts'
 import { formatTimecode } from './format.ts'
-import { loadMedia } from './media.ts'
+import { extractAudioPeaks, loadMedia } from './media.ts'
 import { clearProjectStorage, persistProject, restoreProject } from './projectStorage.ts'
 import {
   createTextOverlay,
@@ -144,6 +144,38 @@ function App() {
       cancelled = true
     }
   }, [])
+
+  // Auto-analyze peaks and pitches for any audio clips missing them (e.g. from restored legacy projects)
+  useEffect(() => {
+    const unanalyzed = audioClips.filter((c) => !c.peaks || c.peaks.length === 0 || !c.pitches)
+    if (unanalyzed.length === 0) return
+    let cancelled = false
+    void Promise.all(
+      unanalyzed.map(async (clip) => {
+        try {
+          const analysis = await extractAudioPeaks(clip.file, 600)
+          return { id: clip.id, ...analysis }
+        } catch {
+          return null
+        }
+      }),
+    ).then((results) => {
+      if (cancelled) return
+      const updates = new Map(
+        results
+          .filter((r): r is { id: string; peaks: number[]; pitches: number[] } => r !== null)
+          .map((r) => [r.id, r]),
+      )
+      if (updates.size > 0) {
+        setAudioClips((current) =>
+          current.map((c) => (updates.has(c.id) ? { ...c, ...updates.get(c.id)! } : c)),
+        )
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [audioClips])
 
   // 2. Debounced auto-save active project whenever edits occur
   useEffect(() => {

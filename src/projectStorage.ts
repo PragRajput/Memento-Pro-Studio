@@ -22,6 +22,7 @@ export interface SerializedAudioClip {
   duration: number
   blob: Blob
   peaks?: number[]
+  pitches?: number[]
 }
 
 export interface ProjectData {
@@ -83,6 +84,7 @@ export async function persistProject(
       duration: c.duration,
       blob: c.file,
       peaks: c.peaks,
+      pitches: c.pitches,
     }))
 
     const project: ProjectData = {
@@ -160,6 +162,7 @@ export async function restoreProject(): Promise<{
         file,
         url,
         peaks: sc.peaks,
+        pitches: sc.pitches,
       }
     })
 

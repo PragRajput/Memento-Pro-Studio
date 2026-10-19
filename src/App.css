@@ -1695,22 +1695,20 @@
 }
 
 .audio-waveform-path {
-  stroke: #34d399;
   stroke-width: 2;
   stroke-linecap: round;
-  opacity: 0.9;
-  transition: stroke var(--transition-fast), opacity var(--transition-fast);
+  opacity: 0.92;
+  transition: opacity var(--transition-fast), filter var(--transition-fast);
 }
 
 .audio-item:hover .audio-waveform-path {
-  stroke: #6ee7b7;
   opacity: 1;
+  filter: drop-shadow(0 0 2px rgba(56, 189, 248, 0.45));
 }
 
 .audio-item.selected .audio-waveform-path {
-  stroke: #a7f3d0;
   opacity: 1;
-  filter: drop-shadow(0 0 3px rgba(110, 231, 183, 0.6));
+  filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.75));
 }
 
 .audio-badge-mini {

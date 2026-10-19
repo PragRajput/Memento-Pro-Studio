@@ -34,8 +34,10 @@ export interface AudioClip {
   url: string
   /** Length in seconds; not finite when the browser cannot determine it. */
   duration: number
-  /** Normalized amplitude/pitch peaks along the audio track for waveform visualization. */
+  /** Normalized amplitude peaks along the audio track for waveform visualization. */
   peaks?: number[]
+  /** Normalized pitch/frequency values along the audio track for waveform visualization. */
+  pitches?: number[]
 }
 
 /** One piece of a video or photo clip placed on the primary visual track. Items play back to back. */

@@ -178,121 +178,208 @@ export async function loadAudioClip(file: File): Promise<AudioClip> {
 
     // 4. Extract real amplitude/pitch peaks for waveform visualization
     let peaks: number[] | undefined
+    let pitches: number[] | undefined
     try {
-      peaks = await extractAudioPeaks(file, 400)
+      const analysis = await extractAudioPeaks(file, 600)
+      peaks = analysis.peaks
+      pitches = analysis.pitches
     } catch {
-      peaks = generateFallbackPeaks(400, file.name)
+      const fallback = generateFallbackPeaks(600, file.name)
+      peaks = fallback.peaks
+      pitches = fallback.pitches
     }
 
-    return { id: crypto.randomUUID(), name: file.name, file, url, duration, peaks }
+    return { id: crypto.randomUUID(), name: file.name, file, url, duration, peaks, pitches }
   } catch (error) {
     URL.revokeObjectURL(url)
     throw error
   }
 }
 
+export interface AudioAnalysis {
+  peaks: number[]
+  pitches: number[]
+}
+
 /**
- * Extract normalized audio peaks from an audio file using Web Audio API.
- * Returns an array of normalized values [0.06 .. 1.0] representing amplitude/dynamics across the clip.
- * Gracefully falls back to deterministic pseudo-peaks if decode is unavailable or fails.
+ * Extract normalized audio amplitude peaks and pitch frequencies from an audio file.
+ * Highly robust across Chrome, Safari, Firefox, and WebKit on macOS and iOS.
  */
-export async function extractAudioPeaks(file: File, samplesCount = 400): Promise<number[]> {
+export async function extractAudioPeaks(file: File, samplesCount = 600): Promise<AudioAnalysis> {
   if (typeof window === 'undefined') {
     return generateFallbackPeaks(samplesCount, file.name)
   }
+
+  // Prefer OfflineAudioContext which bypasses autoplay policy restrictions & acquires no audio hardware
+  const OfflineCtx =
+    window.OfflineAudioContext ??
+    (window as unknown as { webkitOfflineAudioContext: typeof OfflineAudioContext }).webkitOfflineAudioContext
   const AudioCtx =
     window.AudioContext ??
     (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-  if (!AudioCtx) {
+
+  let ctx: BaseAudioContext | null = null
+  try {
+    if (OfflineCtx) {
+      ctx = new OfflineCtx(1, 1, 44100)
+    } else if (AudioCtx) {
+      ctx = new AudioCtx()
+    }
+  } catch {
+    // context instantiation fallback
+  }
+
+  if (!ctx) {
     return generateFallbackPeaks(samplesCount, file.name)
   }
 
   try {
-    const ctx = new AudioCtx()
-    try {
-      const arrayBuffer = await file.arrayBuffer()
-      // Copy arrayBuffer in case decodeAudioData detaches the underlying ArrayBuffer
-      const bufferCopy = arrayBuffer.slice(0)
-      const audioBuffer = await ctx.decodeAudioData(bufferCopy)
-      const channelCount = audioBuffer.numberOfChannels
-      if (channelCount === 0 || audioBuffer.length === 0) {
-        return generateFallbackPeaks(samplesCount, file.name)
-      }
+    const arrayBuffer = await file.arrayBuffer()
+    const bufferCopy = arrayBuffer.slice(0)
 
-      // Mix stereo / surround channels down to mono for balanced amplitude envelope
-      const channels: Float32Array[] = []
-      for (let c = 0; c < Math.min(2, channelCount); c++) {
-        channels.push(audioBuffer.getChannelData(c))
-      }
-
-      const totalFrames = audioBuffer.length
-      const step = Math.max(1, Math.floor(totalFrames / samplesCount))
-      const peaks: number[] = new Array(samplesCount)
-      let maxPeak = 0.0001
-
-      for (let i = 0; i < samplesCount; i++) {
-        const start = i * step
-        const end = Math.min(start + step, totalFrames)
-        let sumSquare = 0
-        let localMax = 0
-
-        for (let j = start; j < end; j++) {
-          let sample = 0
-          for (let c = 0; c < channels.length; c++) {
-            sample += channels[c][j]
-          }
-          sample /= channels.length
-          const abs = Math.abs(sample)
-          if (abs > localMax) localMax = abs
-          sumSquare += abs * abs
+    // Robust Promise wrapper supporting callback-only Safari/WebKit and Promise-based modern browsers
+    const audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
+      let settled = false
+      const onDecoded = (buf: AudioBuffer) => {
+        if (!settled) {
+          settled = true
+          resolve(buf)
         }
-
-        const count = Math.max(1, end - start)
-        const rms = Math.sqrt(sumSquare / count)
-        // Combine peak and RMS for a natural musical waveform
-        const combined = 0.65 * localMax + 0.35 * (rms * 1.8)
-        peaks[i] = combined
-        if (combined > maxPeak) maxPeak = combined
+      }
+      const onError = (err: unknown) => {
+        if (!settled) {
+          settled = true
+          reject(err)
+        }
       }
 
-      // Normalize to range [0.06, 1.0]
-      for (let i = 0; i < samplesCount; i++) {
-        const normalized = peaks[i] / maxPeak
-        peaks[i] = Math.min(1, Math.max(0.06, Number(normalized.toFixed(3))))
+      try {
+        const result = ctx!.decodeAudioData(bufferCopy, onDecoded, onError)
+        if (result && typeof (result as Promise<AudioBuffer>).then === 'function') {
+          (result as Promise<AudioBuffer>).then(onDecoded, onError)
+        }
+      } catch (err) {
+        onError(err)
       }
-      return peaks
-    } finally {
+    })
+
+    const channelCount = audioBuffer.numberOfChannels
+    const totalFrames = audioBuffer.length
+    if (channelCount === 0 || totalFrames === 0) {
+      return generateFallbackPeaks(samplesCount, file.name)
+    }
+
+    const channels: Float32Array[] = []
+    for (let c = 0; c < Math.min(2, channelCount); c++) {
+      channels.push(audioBuffer.getChannelData(c))
+    }
+
+    const step = Math.max(1, Math.floor(totalFrames / samplesCount))
+    const peaks: number[] = new Array(samplesCount)
+    const pitches: number[] = new Array(samplesCount)
+
+    let maxPeak = 0.0001
+    let maxPitch = 0.0001
+
+    for (let i = 0; i < samplesCount; i++) {
+      const start = i * step
+      const end = Math.min(start + step, totalFrames)
+      let sumSquare = 0
+      let localMax = 0
+      let zeroCrossings = 0
+      let prevVal = 0
+
+      for (let j = start; j < end; j++) {
+        let sample = 0
+        for (let c = 0; c < channels.length; c++) {
+          sample += channels[c][j]
+        }
+        sample /= channels.length
+        const abs = Math.abs(sample)
+        if (abs > localMax) localMax = abs
+        sumSquare += abs * abs
+
+        if (j > start && (sample >= 0) !== (prevVal >= 0)) {
+          zeroCrossings++
+        }
+        prevVal = sample
+      }
+
+      const count = Math.max(1, end - start)
+      const rms = Math.sqrt(sumSquare / count)
+      // Amplitude combines peak impact and RMS energy
+      const combinedAmp = 0.65 * localMax + 0.35 * (rms * 1.8)
+      // Zero-crossing rate estimates pitch / frequency brightness
+      const zcr = zeroCrossings / count
+
+      peaks[i] = combinedAmp
+      pitches[i] = zcr
+      if (combinedAmp > maxPeak) maxPeak = combinedAmp
+      if (zcr > maxPitch) maxPitch = zcr
+    }
+
+    // Normalize amplitude [0.06 .. 1.0] and pitch [0.08 .. 1.0]
+    for (let i = 0; i < samplesCount; i++) {
+      peaks[i] = Math.min(1, Math.max(0.06, Number((peaks[i] / maxPeak).toFixed(3))))
+      pitches[i] = Math.min(1, Math.max(0.08, Number((pitches[i] / maxPitch).toFixed(3))))
+    }
+
+    return { peaks, pitches }
+  } catch (err) {
+    console.warn('Audio decoding failed, using organic musical fallback:', err)
+    return generateFallbackPeaks(samplesCount, file.name)
+  } finally {
+    if ('close' in ctx && typeof ctx.close === 'function') {
       try {
         await ctx.close()
       } catch {
         // ignore close error
       }
     }
-  } catch (err) {
-    console.warn('AudioContext decoding failed, falling back to simulated peaks:', err)
-    return generateFallbackPeaks(samplesCount, file.name)
   }
 }
 
 /**
- * Deterministic fallback peak generator for environments without Web Audio API (e.g. tests)
- * or corrupted audio streams. Produces realistic dynamic musical profiles.
+ * Deterministic fallback generator for environments without Web Audio API (e.g. tests)
+ * or corrupted audio streams. Produces rich, realistic dynamic song structures with
+ * varied pitch contours and amplitude drops.
  */
-export function generateFallbackPeaks(samplesCount = 400, seedStr = 'audio'): number[] {
+export function generateFallbackPeaks(samplesCount = 600, seedStr = 'audio'): AudioAnalysis {
   let hash = 0
   for (let i = 0; i < seedStr.length; i++) {
     hash = (hash << 5) - hash + seedStr.charCodeAt(i)
     hash |= 0
   }
   const peaks: number[] = new Array(samplesCount)
+  const pitches: number[] = new Array(samplesCount)
+
   for (let i = 0; i < samplesCount; i++) {
     const t = i / samplesCount
-    const macroEnvelope = Math.sin(t * Math.PI) * 0.4 + 0.3 + 0.2 * Math.sin(t * 14)
-    const beat = Math.abs(Math.sin(t * 70)) * 0.25
-    const noise = Math.abs(Math.sin((hash + i) * 9973)) * 0.2
-    peaks[i] = Math.min(1, Math.max(0.06, Number((macroEnvelope + beat + noise).toFixed(3))))
+    // Dynamic song sections: Intro -> Verse -> Chorus -> Bridge -> Climax -> Outro
+    const songSections =
+      t < 0.15
+        ? 0.3 + 0.2 * Math.sin(t * 30) // Intro build
+        : t < 0.45
+        ? 0.55 + 0.35 * Math.sin(t * 18) // Verse 1 / Chorus
+        : t < 0.6
+        ? 0.4 + 0.25 * Math.sin(t * 22) // Bridge / breakdown
+        : t < 0.88
+        ? 0.75 + 0.25 * Math.sin(t * 26) // High energy Climax / Chorus 2
+        : 0.3 * (1 - (t - 0.88) / 0.12) // Outro fade
+
+    // Musical pitch shifts (melodic vocal contours + bass drops)
+    const pitchCurve =
+      Math.abs(Math.sin(t * 15 + hash)) * 0.5 + Math.abs(Math.cos(t * 43)) * 0.35 + 0.15
+    const beatPulse = Math.pow(Math.abs(Math.sin(t * 64 * Math.PI)), 4) * 0.4
+    const flutter = Math.abs(Math.sin((hash + i) * 8273)) * 0.15
+
+    const combinedAmp = Math.min(1, Math.max(0.06, songSections * 0.7 + beatPulse * 0.2 + flutter * 0.1))
+    const combinedPitch = Math.min(1, Math.max(0.08, pitchCurve * 0.8 + flutter * 0.2))
+
+    peaks[i] = Number(combinedAmp.toFixed(3))
+    pitches[i] = Number(combinedPitch.toFixed(3))
   }
-  return peaks
+  return { peaks, pitches }
 }
 
 /** Some recordings (such as browser-made WebM files) omit their length; seeking far

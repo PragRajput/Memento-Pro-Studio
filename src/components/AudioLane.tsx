@@ -1,9 +1,9 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, PointerEvent } from 'react'
 import { clampAudioStart } from '../audioTimeline.ts'
 import { AUDIO_DRAG_TYPE } from '../dnd.ts'
 import { formatDuration } from '../format.ts'
-import { generateFallbackPeaks } from '../media.ts'
+import { extractAudioPeaks, generateFallbackPeaks } from '../media.ts'
 import { itemLength } from '../timeline.ts'
 import type { AudioClip, AudioTimelineItem } from '../types.ts'
 
@@ -22,11 +22,32 @@ const AUDIO_LANE_CENTER_Y = AUDIO_LANE_HEIGHT / 2
 function AudioWaveform({ clip, item, pixelsPerSecond: pps }: AudioWaveformProps) {
   const width = Math.max(2, itemLength(item) * pps)
 
+  // Live analysis state for immediate backfill if clip hasn't been analyzed yet
+  const [liveData, setLiveData] = useState<{ peaks: number[]; pitches: number[] } | null>(null)
+
+  useEffect(() => {
+    if (clip?.peaks && clip.peaks.length > 0 && clip.pitches && clip.pitches.length > 0) {
+      return
+    }
+    if (!clip?.file) return
+    let cancelled = false
+    void extractAudioPeaks(clip.file, 600)
+      .then((data) => {
+        if (!cancelled) setLiveData(data)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [clip?.file, clip?.peaks, clip?.pitches])
+
   const pathD = useMemo(() => {
-    const peaks =
-      clip?.peaks && clip.peaks.length > 0
-        ? clip.peaks
-        : generateFallbackPeaks(200, clip?.name ?? 'audio')
+    const peaks = (clip?.peaks && clip.peaks.length > 0) ? clip.peaks : liveData?.peaks
+    const pitches = (clip?.pitches && clip.pitches.length > 0) ? clip.pitches : liveData?.pitches
+    const hasData = Boolean(peaks && peaks.length > 0)
+    const fallback = hasData ? null : generateFallbackPeaks(300, clip?.name ?? 'audio')
+    const finalPeaks = hasData ? peaks! : fallback!.peaks
+    const finalPitches = pitches && pitches.length > 0 ? pitches : (fallback?.pitches ?? finalPeaks)
 
     const barStep = 3 // 3px per bar
     const barCount = Math.floor(width / barStep)
@@ -42,16 +63,22 @@ function AudioWaveform({ clip, item, pixelsPerSecond: pps }: AudioWaveformProps)
       const x = i * barStep + 1.5
       const sourceTime = item.inPoint + x / pps
       const clipRatio = Math.max(0, Math.min(1, sourceTime / clipDuration))
-      const peakIdx = Math.min(peaks.length - 1, Math.max(0, Math.floor(clipRatio * peaks.length)))
-      const peakVal = peaks[peakIdx] ?? 0.1
+      const idx = Math.min(finalPeaks.length - 1, Math.max(0, Math.floor(clipRatio * finalPeaks.length)))
+      const peakVal = finalPeaks[idx] ?? 0.1
+      const pitchVal = finalPitches[idx] ?? 0.5
 
-      const barHalf = Math.max(1.5, peakVal * maxAmplitude)
-      const y1 = (AUDIO_LANE_CENTER_Y - barHalf).toFixed(1)
-      const y2 = (AUDIO_LANE_CENTER_Y + barHalf).toFixed(1)
+      // Pitch shapes the upper contour while bass/power anchors the lower contour
+      const topHalf = Math.max(1.5, (0.45 * peakVal + 0.55 * peakVal * pitchVal * 1.5) * maxAmplitude)
+      const bottomHalf = Math.max(1.5, (0.65 * peakVal + 0.35 * peakVal * (1 - pitchVal * 0.6)) * maxAmplitude)
+
+      const y1 = (AUDIO_LANE_CENTER_Y - topHalf).toFixed(1)
+      const y2 = (AUDIO_LANE_CENTER_Y + bottomHalf).toFixed(1)
       d += `M${x.toFixed(1)} ${y1}V${y2} `
     }
     return d
-  }, [clip, item.inPoint, item.outPoint, item.volume, width, pps])
+  }, [liveData, clip, item.inPoint, item.outPoint, item.volume, width, pps])
+
+  const gradId = `audio-grad-${item.id}`
 
   return (
     <svg
@@ -60,6 +87,15 @@ function AudioWaveform({ clip, item, pixelsPerSecond: pps }: AudioWaveformProps)
       preserveAspectRatio="none"
       aria-hidden="true"
     >
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#38bdf8" />
+          <stop offset="30%" stopColor="#34d399" />
+          <stop offset="50%" stopColor="#10b981" />
+          <stop offset="70%" stopColor="#34d399" />
+          <stop offset="100%" stopColor="#059669" />
+        </linearGradient>
+      </defs>
       <line
         x1={0}
         y1={AUDIO_LANE_CENTER_Y}
@@ -67,7 +103,7 @@ function AudioWaveform({ clip, item, pixelsPerSecond: pps }: AudioWaveformProps)
         y2={AUDIO_LANE_CENTER_Y}
         className="audio-waveform-centerline"
       />
-      <path d={pathD} className="audio-waveform-path" />
+      <path d={pathD} className="audio-waveform-path" stroke={`url(#${gradId})`} />
     </svg>
   )
 }
