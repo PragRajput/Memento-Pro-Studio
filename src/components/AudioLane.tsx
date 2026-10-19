@@ -16,8 +16,10 @@ interface AudioLaneProps {
   pixelsPerSecond: number
   /** Audio may not extend past the video track's own length. */
   maxEnd: number
+  trackIndex?: number
+  trackLabel?: string
   onSelectItem: (id: string | null) => void
-  onAddClip: (clipId: string, desiredStart: number) => void
+  onAddClip: (clipId: string, desiredStart: number, trackIndex: number) => void
   onMoveItem: (id: string, start: number) => void
   onTrimItem: (id: string, edge: 'in' | 'out', sourceTime: number) => void
   onVolumeChange: (id: string, volume: number) => void
@@ -29,6 +31,8 @@ export function AudioLane({
   selectedItemId,
   pixelsPerSecond: pps,
   maxEnd,
+  trackIndex = 0,
+  trackLabel,
   onSelectItem,
   onAddClip,
   onMoveItem,
@@ -39,6 +43,8 @@ export function AudioLane({
   const [dropMarker, setDropMarker] = useState<number | null>(null)
   const [dragGhost, setDragGhost] = useState<{ id: string; start: number } | null>(null)
 
+  const laneItems = items.filter((item) => (item.trackIndex ?? 0) === trackIndex)
+
   const trackTime = (clientX: number) =>
     (clientX - (trackRef.current?.getBoundingClientRect().left ?? 0)) / pps
 
@@ -47,8 +53,6 @@ export function AudioLane({
     event.preventDefault()
     event.stopPropagation()
     event.dataTransfer.dropEffect = 'copy'
-    // The dragged clip's own length isn't readable until drop, so this preview can't
-    // show where it will actually snap; the drop itself clamps it precisely.
     const rawTime = Math.max(0, trackTime(event.clientX))
     const snappedTime = rawTime < 1.5 ? 0 : rawTime
     setDropMarker(snappedTime)
@@ -62,7 +66,7 @@ export function AudioLane({
     if (!clipId) return
     const rawTime = Math.max(0, trackTime(event.clientX))
     const snappedTime = rawTime < 1.5 ? 0 : rawTime
-    onAddClip(clipId, snappedTime)
+    onAddClip(clipId, snappedTime, trackIndex)
   }
 
   /** Press on an item: a click selects it, a drag repositions it (collision-clamped live). */
@@ -81,7 +85,7 @@ export function AudioLane({
       moved = true
       const rawDesired = item.start + dx / pps
       const desired = rawDesired < 1.5 ? 0 : rawDesired
-      liveStart = clampAudioStart(items, item.id, desired, length, maxEnd) ?? item.start
+      liveStart = clampAudioStart(items, item.id, desired, length, maxEnd, trackIndex) ?? item.start
       setDragGhost({ id: item.id, start: liveStart })
     }
     const finish = (commit: boolean) => {
@@ -121,11 +125,13 @@ export function AudioLane({
     element.addEventListener('pointercancel', finish)
   }
 
+  const label = trackLabel ?? `A${trackIndex + 1}`
+
   return (
     <div
       className="track audio-track"
       ref={trackRef}
-      aria-label="Audio"
+      aria-label={`Audio Track ${trackIndex + 1}`}
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) onSelectItem(null)
       }}
@@ -135,35 +141,43 @@ export function AudioLane({
       }}
       onDrop={handleDrop}
     >
-      {items.length === 0 && (
-        <p className="empty track-hint">Drag audio here from Media, for music or voice-over.</p>
+      <div className="track-badge audio-badge" title={`Audio Track ${trackIndex + 1}`}>
+        {label}
+      </div>
+      {laneItems.length === 0 && (
+        <p className="empty track-hint">Drag audio here for {label} (parallel playback supported).</p>
       )}
-      {items.map((item) => {
+      {laneItems.map((item) => {
         const clip = clips.get(item.clipId)
         const ghost = dragGhost?.id === item.id ? dragGhost.start : null
         const left = (ghost ?? item.start) * pps
+        const volPercent = Math.round(item.volume * 100)
         return (
           <div
             key={item.id}
             className={`timeline-item audio-item${item.id === selectedItemId ? ' selected' : ''}${ghost !== null ? ' dragging' : ''}`}
             style={{ left, width: itemLength(item) * pps }}
-            title={`${clip?.name ?? 'Missing clip'} · ${formatDuration(itemLength(item))}`}
+            title={`${clip?.name ?? 'Missing clip'} · Vol: ${volPercent}% · ${formatDuration(itemLength(item))}`}
             onPointerDown={(event) => beginItemMove(event, item)}
           >
             <span className="item-label">{clip?.name}</span>
-            {item.id === selectedItemId && (
-              <input
-                type="range"
-                className="volume-slider"
-                aria-label="Volume"
-                min={0}
-                max={1}
-                step={0.01}
-                value={item.volume}
-                onPointerDown={(event) => event.stopPropagation()}
-                onChange={(event) => onVolumeChange(item.id, Number(event.target.value))}
-              />
-            )}
+            <div className="audio-item-controls" onPointerDown={(event) => event.stopPropagation()}>
+              <span className="volume-label" title={`Volume: ${volPercent}%`}>
+                {item.volume === 0 ? '🔇' : '🔊'} {volPercent}%
+              </span>
+              {item.id === selectedItemId && (
+                <input
+                  type="range"
+                  className="volume-slider"
+                  aria-label="Volume"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={item.volume}
+                  onChange={(event) => onVolumeChange(item.id, Number(event.target.value))}
+                />
+              )}
+            </div>
             <div
               className="trim-handle in"
               aria-label="Trim start"

@@ -80,12 +80,13 @@ export function useAudioLanePlayback(
 
   // Stop all playback when component unmounts
   useEffect(() => {
+    const elements = elementsRef.current
     return () => {
-      for (const audio of elementsRef.current.values()) {
+      for (const audio of elements.values()) {
         audio.pause()
         audio.src = ''
       }
-      elementsRef.current.clear()
+      elements.clear()
     }
   }, [])
 }

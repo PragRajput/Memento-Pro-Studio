@@ -54,10 +54,6 @@ function App() {
   const player = useSequencePlayer(timelineVideoRef, items, clipsById, totalDuration)
 
   useAudioLanePlayback(timelineAudioRef, audioItems, audioClipsById, player.time, player.playing)
-  const videoSplitResult = splitAt(items, player.time)
-  const audioSplitResult = splitAudioAt(audioItems, player.time)
-  const textSplitResult = splitTextAtTime(textItems, player.time)
-  const exporter = useExporter(items, clipsById, audioItems, audioClipsById, textItems)
   // A selection stops being valid the moment its item disappears, however that
   // happened (deleted directly, or its clip removed); derive it instead of tracking
   // every removal path separately.
@@ -69,6 +65,11 @@ function App() {
       : null
   const validSelectedTextId =
     selectedTextId !== null && textItems.some((item) => item.id === selectedTextId) ? selectedTextId : null
+
+  const videoSplitResult = splitAt(items, player.time)
+  const audioSplitResult = splitAudioAt(audioItems, player.time, validSelectedAudioItemId)
+  const textSplitResult = splitTextAtTime(textItems, player.time)
+  const exporter = useExporter(items, clipsById, audioItems, audioClipsById, textItems)
 
 
   const importFiles = async (files: File[]) => {
@@ -135,24 +136,38 @@ function App() {
     showTimeline()
   }
 
-  const addAudioToTimeline = (clipId: string, desiredStart?: number) => {
+  const addAudioToTimeline = (clipId: string, desiredStart?: number, explicitTrackIndex?: number) => {
     const clip = audioClipsById.get(clipId)
     if (!clip) return
 
     const clipDuration = Number.isFinite(clip.duration) && clip.duration > 0 ? clip.duration : 30
+
+    // Decide track: if not specified (e.g. '+' button), if Track 0 has audio at 0:00, auto-assign Track 1
+    let chosenTrack = explicitTrackIndex ?? 0
+    if (explicitTrackIndex === undefined) {
+      const track0Busy = audioItems.some((item) => (item.trackIndex ?? 0) === 0 && item.start < 1.5)
+      const track1Busy = audioItems.some((item) => (item.trackIndex ?? 0) === 1 && item.start < 1.5)
+      if (track0Busy && !track1Busy) {
+        chosenTrack = 1
+      }
+    }
+
     let targetStart: number
     if (desiredStart !== undefined) {
       targetStart = desiredStart < 1.5 ? 0 : desiredStart
     } else {
-      // From '+' button: if beginning of track is open, place at 0:00
-      const startBlocked = audioItems.some((item) => item.start < 1.5)
-      targetStart = startBlocked ? nextAudioStart(audioItems) : 0
+      // From '+' button: if beginning of chosen track is open, place at 0:00
+      const startBlocked = audioItems.some(
+        (item) => (item.trackIndex ?? 0) === chosenTrack && item.start < 1.5,
+      )
+      targetStart = startBlocked ? nextAudioStart(audioItems, chosenTrack) : 0
     }
 
     const placement = findAudioPlacement(
       audioItems,
       targetStart,
       clipDuration,
+      chosenTrack,
     )
 
     if (placement === null) {
@@ -160,7 +175,7 @@ function App() {
       return
     }
 
-    const item = createAudioItem(clipId, 0, placement.length, placement.start)
+    const item = createAudioItem(clipId, 0, placement.length, placement.start, chosenTrack)
     setAudioItems((current) => [...current, item])
     setSelectedAudioItemId(item.id)
     setSelectedItemId(null)

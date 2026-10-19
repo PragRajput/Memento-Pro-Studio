@@ -44,6 +44,42 @@ export function Preview({
     (item) => (time >= item.start && time < item.start + item.duration) || item.id === selectedTextId,
   )
 
+  const beginTitleDrag = (event: React.PointerEvent<HTMLDivElement>, title: TextOverlay) => {
+    if (event.button !== 0) return
+    event.stopPropagation()
+    onSelectText(title.id)
+    const element = event.currentTarget
+    const stage = element.closest('.preview-stage') as HTMLElement | null
+    if (!stage) return
+    element.setPointerCapture(event.pointerId)
+    const rect = stage.getBoundingClientRect()
+    const startX = event.clientX
+    const startY = event.clientY
+    const startPosX = title.x ?? 50
+    const startPosY = title.y ?? (title.position === 'top' ? 15 : title.position === 'center' ? 50 : 85)
+    let moved = false
+
+    const onMove = (move: PointerEvent) => {
+      const dx = move.clientX - startX
+      const dy = move.clientY - startY
+      if (!moved && Math.hypot(dx, dy) < 3) return
+      moved = true
+      const nextX = Math.round(Math.min(95, Math.max(5, startPosX + (dx / rect.width) * 100)))
+      const nextY = Math.round(Math.min(95, Math.max(5, startPosY + (dy / rect.height) * 100)))
+      onUpdateText({ ...title, x: nextX, y: nextY })
+    }
+
+    const finish = () => {
+      element.removeEventListener('pointermove', onMove)
+      element.removeEventListener('pointerup', finish)
+      element.removeEventListener('pointercancel', finish)
+    }
+
+    element.addEventListener('pointermove', onMove)
+    element.addEventListener('pointerup', finish)
+    element.addEventListener('pointercancel', finish)
+  }
+
   return (
     <section className="panel preview" aria-label="Preview">
       <p className="preview-label">
@@ -72,19 +108,36 @@ export function Preview({
           </div>
         )}
         <div className="preview-overlay">
-          {visibleTexts.map((title) => (
-            <div
-              key={title.id}
-              className={`title-overlay ${title.position} ${title.size}${title.id === selectedTextId ? ' selected' : ''}`}
-              style={{ color: title.color }}
-              onClick={(event) => {
-                event.stopPropagation()
-                onSelectText(title.id)
-              }}
-            >
-              {title.text}
-            </div>
-          ))}
+          {visibleTexts.map((title) => {
+            const posX = title.x ?? 50
+            const posY = title.y ?? (title.position === 'top' ? 15 : title.position === 'center' ? 50 : 85)
+            const fontSize = title.fontSize ?? (title.size === 'small' ? 28 : title.size === 'large' ? 68 : 44)
+            const fontFamily = title.fontFamily ? `"${title.fontFamily}", sans-serif` : 'Inter, sans-serif'
+            const isSelected = title.id === selectedTextId
+
+            return (
+              <div
+                key={title.id}
+                className={`title-overlay${isSelected ? ' selected' : ''}`}
+                style={{
+                  left: `${posX}%`,
+                  top: `${posY}%`,
+                  fontSize: `${fontSize}px`,
+                  fontFamily,
+                  color: title.color,
+                  backgroundColor: title.backgroundColor && title.backgroundColor !== 'transparent' ? title.backgroundColor : undefined,
+                }}
+                title="Click and drag to position anywhere on screen"
+                onPointerDown={(event) => beginTitleDrag(event, title)}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  onSelectText(title.id)
+                }}
+              >
+                {title.text}
+              </div>
+            )
+          })}
         </div>
       </div>
 

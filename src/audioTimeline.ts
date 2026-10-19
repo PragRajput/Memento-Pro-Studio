@@ -6,25 +6,34 @@ export function createAudioItem(
   inPoint: number,
   outPoint: number,
   start: number,
+  trackIndex = 0,
 ): AudioTimelineItem {
-  return { id: crypto.randomUUID(), clipId, inPoint, outPoint, start, volume: 1 }
+  return { id: crypto.randomUUID(), clipId, inPoint, outPoint, start, volume: 1, trackIndex }
 }
 
 export function audioItemEnd(item: AudioTimelineItem): number {
   return item.start + itemLength(item)
 }
 
-/** Where a newly added item should start: right after the last one, or at 0 if the lane is empty. */
-export function nextAudioStart(items: readonly AudioTimelineItem[]): number {
-  return items.reduce((end, item) => Math.max(end, audioItemEnd(item)), 0)
+/** Where a newly added item should start on a specific track: right after the last one, or at 0 if empty. */
+export function nextAudioStart(items: readonly AudioTimelineItem[], trackIndex = 0): number {
+  return items
+    .filter((item) => (item.trackIndex ?? 0) === trackIndex)
+    .reduce((end, item) => Math.max(end, audioItemEnd(item)), 0)
 }
 
-/** Find the item covering a timeline time, if any (items never overlap each other). */
+/** Find the first item covering a timeline time, optionally scoped to a track. */
 export function locateAudioItem(
   items: readonly AudioTimelineItem[],
   time: number,
+  trackIndex?: number,
 ): AudioTimelineItem | null {
-  return items.find((item) => time >= item.start && time < audioItemEnd(item)) ?? null
+  return (
+    items.find((item) => {
+      if (trackIndex !== undefined && (item.trackIndex ?? 0) !== trackIndex) return false
+      return time >= item.start && time < audioItemEnd(item)
+    }) ?? null
+  )
 }
 
 interface Span {
@@ -32,10 +41,15 @@ interface Span {
   end: number
 }
 
-/** The free gaps between other items, within [0, maxEnd]. */
-function openGaps(items: readonly AudioTimelineItem[], excludeId: string, maxEnd: number): Span[] {
+/** The free gaps between other items on the same track, within [0, maxEnd]. */
+function openGaps(
+  items: readonly AudioTimelineItem[],
+  excludeId: string,
+  maxEnd: number,
+  trackIndex = 0,
+): Span[] {
   const obstacles = items
-    .filter((item) => item.id !== excludeId)
+    .filter((item) => item.id !== excludeId && (item.trackIndex ?? 0) === trackIndex)
     .map((item) => ({ start: item.start, end: audioItemEnd(item) }))
     .sort((a, b) => a.start - b.start)
   const gaps: Span[] = []
@@ -49,19 +63,21 @@ function openGaps(items: readonly AudioTimelineItem[], excludeId: string, maxEnd
 }
 
 /**
- * Find where a new audio clip can land: finds the closest gap to desiredStart
+ * Find where a new audio clip can land on a track: finds the closest gap to desiredStart
  * and automatically fits its length to the available gap if bounded by another item.
  */
 export function findAudioPlacement(
   items: readonly AudioTimelineItem[],
   desiredStart: number,
   clipDuration: number,
+  trackIndex = 0,
   maxEnd?: number,
-): { start: number; length: number } | null {
+): { start: number; length: number; trackIndex: number } | null {
   const target = desiredStart < 1.5 ? 0 : desiredStart
 
-  // Sort existing obstacles
+  // Sort existing obstacles on this specific track
   const obstacles = items
+    .filter((item) => (item.trackIndex ?? 0) === trackIndex)
     .map((item) => ({ start: item.start, end: audioItemEnd(item) }))
     .sort((a, b) => a.start - b.start)
   const gaps: Span[] = []
@@ -91,12 +107,12 @@ export function findAudioPlacement(
   const snappedStart = start < 1.5 && best.start === 0 ? 0 : start
   const available = best.end === Infinity ? clipDuration : best.end - snappedStart
   const length = clamp(Math.min(clipDuration, available), MIN_ITEM_LENGTH, available)
-  return { start: snappedStart, length }
+  return { start: snappedStart, length, trackIndex }
 }
 
 /**
  * Where a dragged item should land: as close to `desiredStart` as possible,
- * within [0, maxEnd], without overlapping another item in the lane.
+ * within [0, maxEnd], without overlapping another item in the same lane.
  */
 export function clampAudioStart(
   items: readonly AudioTimelineItem[],
@@ -104,11 +120,12 @@ export function clampAudioStart(
   desiredStart: number,
   length: number,
   maxEnd: number,
+  trackIndex = 0,
 ): number | null {
   const target = desiredStart < 1.5 ? 0 : desiredStart
   if (maxEnd <= 0) return Math.max(0, target)
   const desired = clamp(target, 0, Math.max(0, maxEnd - length))
-  const viable = openGaps(items, excludeId, maxEnd).filter((gap) => gap.end - gap.start >= length - 1e-9)
+  const viable = openGaps(items, excludeId, maxEnd, trackIndex).filter((gap) => gap.end - gap.start >= length - 1e-9)
   if (viable.length === 0) return null
 
   let best = viable[0]
@@ -125,17 +142,17 @@ export function clampAudioStart(
   return result < 1.5 && best.start === 0 ? 0 : result
 }
 
-
-/** The nearest other items' edges around `start`, to bound a trim. */
+/** The nearest other items' edges around `start` on the same track, to bound a trim. */
 function neighborBounds(
   items: readonly AudioTimelineItem[],
   excludeId: string,
   start: number,
+  trackIndex = 0,
 ): { prevEnd: number; nextStart: number } {
   let prevEnd = 0
   let nextStart = Infinity
   for (const item of items) {
-    if (item.id === excludeId) continue
+    if (item.id === excludeId || (item.trackIndex ?? 0) !== trackIndex) continue
     const end = audioItemEnd(item)
     if (end <= start && end > prevEnd) prevEnd = end
     if (item.start >= start && item.start < nextStart) nextStart = item.start
@@ -146,7 +163,7 @@ function neighborBounds(
 /**
  * Move one edge of an audio item. Trimming the in edge also moves the item's
  * timeline position, so the untouched edge stays put. Neither edge may cross a
- * neighboring item, the source bounds, or [0, maxEnd].
+ * neighboring item on the same track, the source bounds, or [0, maxEnd].
  */
 export function trimAudioItem(
   items: readonly AudioTimelineItem[],
@@ -158,17 +175,13 @@ export function trimAudioItem(
 ): AudioTimelineItem[] {
   return items.map((item) => {
     if (item.id !== id) return item
-    const { prevEnd, nextStart } = neighborBounds(items, id, item.start)
+    const { prevEnd, nextStart } = neighborBounds(items, id, item.start, item.trackIndex ?? 0)
     if (edge === 'out') {
       const lengthLimit = Math.min(nextStart, maxEnd) - item.start
       const outPoint = clamp(sourceTime, item.inPoint + MIN_ITEM_LENGTH, sourceDuration)
       const length = clamp(outPoint - item.inPoint, MIN_ITEM_LENGTH, Math.max(MIN_ITEM_LENGTH, lengthLimit))
       return { ...item, outPoint: item.inPoint + length }
     }
-    // The in edge and the timeline start move together (shrinking from the left
-    // moves the start later; growing moves it earlier), while the out edge and
-    // audioItemEnd(item) both stay fixed. Find the shared shift valid for both the
-    // source bounds and the timeline bounds, then apply it to both fields at once.
     const end = audioItemEnd(item)
     const minDelta = Math.max(0 - item.inPoint, prevEnd - item.start)
     const maxDelta = Math.min(item.outPoint - MIN_ITEM_LENGTH - item.inPoint, end - MIN_ITEM_LENGTH - item.start)
@@ -181,15 +194,16 @@ export function trimAudioItem(
 export function splitAudioAt(
   items: readonly AudioTimelineItem[],
   time: number,
+  selectedId?: string | null,
 ): { items: AudioTimelineItem[]; rightId: string } | null {
-  const item = locateAudioItem(items, time)
-  if (item === null) return null
+  const item = selectedId ? items.find((i) => i.id === selectedId) : locateAudioItem(items, time)
+  if (!item || time < item.start || time >= audioItemEnd(item)) return null
   const offset = time - item.start
   if (offset < MIN_ITEM_LENGTH || itemLength(item) - offset < MIN_ITEM_LENGTH) return null
 
   const cut = item.inPoint + offset
   const left = { ...item, outPoint: cut }
-  const right = createAudioItem(item.clipId, cut, item.outPoint, time)
+  const right = createAudioItem(item.clipId, cut, item.outPoint, time, item.trackIndex ?? 0)
   right.volume = item.volume
   return { items: items.map((candidate) => (candidate.id === item.id ? left : candidate)).concat(right), rightId: right.id }
 }

@@ -14,7 +14,6 @@ import {
   getFirstEncodableVideoCodec,
 } from 'mediabunny'
 import type { AudioCodec, InputAudioTrack, InputVideoTrack, VideoCodec } from 'mediabunny'
-import { locateAudioItem } from '../audioTimeline.ts'
 import { drawTextOverlays } from '../textDraw.ts'
 import { locate } from '../timeline.ts'
 import type { AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem } from '../types.ts'
@@ -162,6 +161,7 @@ export async function exportTimeline(
         report('Mixing audio', 0.1 * fraction),
       )
       audioSource.close()
+    }
     if ('fonts' in document) {
       await (document as unknown as { fonts: { ready: Promise<void> } }).fonts.ready
     }

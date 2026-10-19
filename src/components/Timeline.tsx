@@ -45,7 +45,7 @@ interface TimelineProps {
   audioClips: ReadonlyMap<string, AudioClip>
   selectedAudioItemId: string | null
   onSelectAudioItem: (id: string | null) => void
-  onAddAudioClip: (clipId: string, desiredStart: number) => void
+  onAddAudioClip: (clipId: string, desiredStart?: number, trackIndex?: number) => void
   onMoveAudioItem: (id: string, start: number) => void
   onTrimAudioItem: (id: string, edge: 'in' | 'out', sourceTime: number) => void
   onAudioVolumeChange: (id: string, volume: number) => void
@@ -102,6 +102,10 @@ export function Timeline({
   const viewportWidth = useElementWidth(scrollRef)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [reorder, setReorder] = useState<Reorder | null>(null)
+  const [extraTracks, setExtraTracks] = useState(0)
+
+  const maxTrackInItems = audioItems.reduce((max, item) => Math.max(max, item.trackIndex ?? 0), 0)
+  const trackCount = Math.max(2, maxTrackInItems + 1, extraTracks + 1)
 
   const starts = itemStarts(items)
   const contentWidth = Math.max(viewportWidth, (duration + TRAILING_SPACE) * pps)
@@ -247,6 +251,14 @@ export function Timeline({
           <button
             type="button"
             className="secondary"
+            onClick={() => setExtraTracks((c) => c + 1)}
+            title="Add another parallel audio track"
+          >
+            + Audio Track
+          </button>
+          <button
+            type="button"
+            className="secondary"
             onClick={onDelete}
             disabled={selectedItemId === null && selectedAudioItemId === null && selectedTextId === null}
           >
@@ -349,18 +361,23 @@ export function Timeline({
             })}
             {markerTime !== null && <div className="drop-marker" style={{ left: markerTime * pps }} />}
           </div>
-          <AudioLane
-            items={audioItems}
-            clips={audioClips}
-            selectedItemId={selectedAudioItemId}
-            pixelsPerSecond={pps}
-            maxEnd={duration}
-            onSelectItem={onSelectAudioItem}
-            onAddClip={onAddAudioClip}
-            onMoveItem={onMoveAudioItem}
-            onTrimItem={onTrimAudioItem}
-            onVolumeChange={onAudioVolumeChange}
-          />
+          {Array.from({ length: trackCount }, (_, tIndex) => (
+            <AudioLane
+              key={tIndex}
+              items={audioItems}
+              clips={audioClips}
+              selectedItemId={selectedAudioItemId}
+              pixelsPerSecond={pps}
+              maxEnd={duration}
+              trackIndex={tIndex}
+              trackLabel={`A${tIndex + 1}`}
+              onSelectItem={onSelectAudioItem}
+              onAddClip={(clipId, start) => onAddAudioClip(clipId, start, tIndex)}
+              onMoveItem={onMoveAudioItem}
+              onTrimItem={onTrimAudioItem}
+              onVolumeChange={onAudioVolumeChange}
+            />
+          ))}
           <div className="playhead" style={{ left: playheadX }} />
         </div>
       </div>
