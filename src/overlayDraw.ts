@@ -4,7 +4,6 @@ import type { LowerThirdStyle, OverlayAnimation, OverlayItem, VfxOverlayType } f
 export interface VfxPresetInfo {
   id: VfxOverlayType
   name: string
-  icon: string
   description: string
 }
 
@@ -12,43 +11,36 @@ export const VFX_OVERLAY_PRESETS: readonly VfxPresetInfo[] = [
   {
     id: 'letterbox',
     name: 'Cinematic Bars',
-    icon: '🎬',
     description: '2.35:1 widescreen top & bottom black letterbox bars',
   },
   {
     id: 'vignette',
     name: 'Vignette',
-    icon: '🌑',
     description: 'Soft feathered dark focus around the frame edges',
   },
   {
     id: 'film-grain',
     name: 'Film Grain',
-    icon: '🎞️',
     description: 'Classic 35mm analogue celluloid grain texture',
   },
   {
     id: 'light-leak',
     name: 'Light Leak',
-    icon: '✨',
     description: 'Warm organic golden sun flare and ambient glow',
   },
   {
     id: 'glitch',
     name: 'Glitch / VHS',
-    icon: '⚡',
     description: 'Analog video tape distortion and chromatic scan lines',
   },
   {
     id: 'scanlines',
     name: 'CRT Scanlines',
-    icon: '📺',
     description: 'Retro arcade / TV monitor horizontal phosphor scanlines',
   },
   {
     id: 'bokeh',
     name: 'Bokeh Dust',
-    icon: '🫧',
     description: 'Dreamy floating out-of-focus optical light circles',
   },
 ]
@@ -56,7 +48,6 @@ export const VFX_OVERLAY_PRESETS: readonly VfxPresetInfo[] = [
 export interface LowerThirdPresetInfo {
   id: LowerThirdStyle
   name: string
-  icon: string
   description: string
 }
 
@@ -64,25 +55,21 @@ export const LOWER_THIRD_PRESETS: readonly LowerThirdPresetInfo[] = [
   {
     id: 'broadcast',
     name: 'Broadcast Bar',
-    icon: '📺',
     description: 'Modern television lower third with accent pill and bold title',
   },
   {
     id: 'minimal',
     name: 'Minimal Tag',
-    icon: '🏷️',
     description: 'Clean frosted glass tag with sleek typography',
   },
   {
     id: 'social',
     name: 'Social Handle',
-    icon: '💬',
     description: 'Creator tag with avatar icon and @handle label',
   },
   {
     id: 'breaking-news',
     name: 'Breaking News',
-    icon: '🔴',
     description: 'High-impact red alert ribbon and headline banner',
   },
 ]
@@ -505,6 +492,17 @@ export function drawOverlays(
   }
 }
 
+function colorWithAlpha(color: string, alpha: number): string {
+  if (color.startsWith('#')) {
+    const hex = color.slice(1)
+    const r = parseInt(hex.length === 3 ? hex[0] + hex[0] : hex.slice(0, 2), 16) || 0
+    const g = parseInt(hex.length === 3 ? hex[1] + hex[1] : hex.slice(2, 4), 16) || 0
+    const b = parseInt(hex.length === 3 ? hex[2] + hex[2] : hex.slice(4, 6), 16) || 0
+    return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`
+  }
+  return color
+}
+
 function drawMediaOverlay(
   context: CanvasRenderingContext2D,
   item: OverlayItem,
@@ -517,21 +515,62 @@ function drawMediaOverlay(
   const widthPct = (item.width ?? 30) / 100
   const dw = size.width * widthPct
   const aspect = frame.height > 0 ? frame.width / frame.height : 16 / 9
-  const dh = dw / aspect
+  const dh = item.pipHeight ? (item.pipHeight / 100) * size.height : dw / aspect
 
   const cx = ((item.x ?? 50) / 100) * size.width
   const cy = ((item.y ?? 50) / 100) * size.height
   const dx = cx - dw / 2
   const dy = cy - dh / 2
 
-  const radius = Math.min(item.borderRadius ?? 0, Math.min(dw, dh) / 2)
+  const shape = item.pipShape ?? 'rounded'
+  const isCircle = shape === 'circle'
+  const radius = isCircle
+    ? Math.min(dw, dh) / 2
+    : item.pipRadiusPct !== undefined
+      ? (item.pipRadiusPct / 100) * (Math.min(dw, dh) / 2)
+      : Math.min(item.borderRadius ?? 0, Math.min(dw, dh) / 2)
 
   context.save()
-  if (radius > 0) {
-    context.beginPath()
-    pathRoundedRect(context, dx, dy, dw, dh, radius)
-    context.clip()
+
+  // Apply rotation and flip around center
+  context.translate(cx, cy)
+  if (item.pipRotation) {
+    context.rotate((item.pipRotation * Math.PI) / 180)
   }
+  if (item.pipFlipH) {
+    context.scale(-1, 1)
+  }
+  context.translate(-cx, -cy)
+
+  // Draw drop shadow if enabled
+  if (item.pipShadow) {
+    context.save()
+    const shadowOpacity = item.pipShadowOpacity ?? 0.55
+    context.shadowColor = `rgba(0, 0, 0, ${shadowOpacity})`
+    context.shadowBlur = (item.pipShadowBlur ?? 16) * (size.height / 1080)
+    context.shadowOffsetY = (item.pipShadowY ?? 8) * (size.height / 1080)
+    context.fillStyle = 'rgba(0,0,0,1)'
+    context.beginPath()
+    if (isCircle) {
+      context.arc(cx, cy, radius, 0, Math.PI * 2)
+    } else {
+      pathRoundedRect(context, dx, dy, dw, dh, radius)
+    }
+    context.fill()
+    context.restore()
+  }
+
+  // Clip to shape
+  context.save()
+  context.beginPath()
+  if (isCircle) {
+    context.arc(cx, cy, radius, 0, Math.PI * 2)
+  } else if (radius > 0) {
+    pathRoundedRect(context, dx, dy, dw, dh, radius)
+  } else {
+    context.rect(dx, dy, dw, dh)
+  }
+  context.clip()
 
   frame.draw(context, dx, dy, dw, dh)
   context.restore()
@@ -542,10 +581,16 @@ function drawMediaOverlay(
     context.lineWidth = item.borderWidth * (size.height / 720)
     context.strokeStyle = item.borderColor
     context.beginPath()
-    pathRoundedRect(context, dx, dy, dw, dh, radius)
+    if (isCircle) {
+      context.arc(cx, cy, radius, 0, Math.PI * 2)
+    } else {
+      pathRoundedRect(context, dx, dy, dw, dh, radius)
+    }
     context.stroke()
     context.restore()
   }
+
+  context.restore()
 }
 
 function drawVfxOverlay(
@@ -559,20 +604,30 @@ function drawVfxOverlay(
 
   switch (type) {
     case 'letterbox': {
-      // Top and bottom 2.35:1 aspect widescreen black bars
-      const barHeight = Math.round(size.height * 0.125 * intensity)
-      context.fillStyle = '#000000'
-      context.fillRect(0, 0, size.width, barHeight)
-      context.fillRect(0, size.height - barHeight, size.width, barHeight)
+      const ratioStr = item.vfxLetterboxRatio ?? '2.35'
+      const targetRatio = ratioStr === '4:3' ? 4 / 3 : parseFloat(ratioStr) || 2.35
+      const frameRatio = size.width / size.height
+      let barHeight = Math.round(size.height * 0.125 * intensity)
+      if (targetRatio > frameRatio) {
+        const visibleHeight = size.width / targetRatio
+        barHeight = Math.round(((size.height - visibleHeight) / 2) * intensity)
+      }
+      if (barHeight > 0) {
+        context.fillStyle = '#000000'
+        context.fillRect(0, 0, size.width, barHeight)
+        context.fillRect(0, size.height - barHeight, size.width, barHeight)
+      }
       break
     }
     case 'vignette': {
       const cx = size.width / 2
       const cy = size.height / 2
       const radius = Math.hypot(cx, cy)
-      const grad = context.createRadialGradient(cx, cy, radius * 0.45, cx, cy, radius)
+      const feather = item.vfxVignetteFeather ?? 0.45
+      const color = item.vfxVignetteColor ?? '#000000'
+      const grad = context.createRadialGradient(cx, cy, radius * feather, cx, cy, radius)
       grad.addColorStop(0, 'rgba(0, 0, 0, 0)')
-      grad.addColorStop(1, `rgba(0, 0, 0, ${(0.85 * intensity).toFixed(3)})`)
+      grad.addColorStop(1, colorWithAlpha(color, 0.85 * intensity))
       context.fillStyle = grad
       context.fillRect(0, 0, size.width, size.height)
       break
@@ -629,7 +684,7 @@ function drawVfxOverlay(
       break
     }
     case 'bokeh': {
-      const orbs = 14
+      const orbs = item.vfxBokehCount ?? 14
       context.globalCompositeOperation = 'screen'
       for (let i = 0; i < orbs; i++) {
         const ox = ((Math.sin(i * 89 + time * 0.3) + 1) * 0.5) * size.width
@@ -653,7 +708,8 @@ function drawLowerThirdOverlay(
   item: OverlayItem,
   size: Size,
 ) {
-  const scale = size.height / 720
+  const l3Scale = item.lowerThirdScale ?? 1
+  const scale = (size.height / 720) * l3Scale
   const titleText = item.title ?? 'Speaker Name'
   const subtitleText = item.subtitle ?? 'Title / Role'
   const accentColor = item.accentColor ?? '#3b82f6'
@@ -779,10 +835,30 @@ function drawColorWashOverlay(
   item: OverlayItem,
   size: Size,
 ) {
+  const shape = item.colorWashShape ?? (item.colorSecondary ? 'linear' : 'flat')
   const c1 = item.color ?? '#3b82f6'
-  const c2 = item.colorSecondary
+  const c2 = item.colorSecondary ?? c1
+  const scrimSize = item.colorWashScrimSize ?? 0.5
 
-  if (c2) {
+  if (shape === 'scrim-bottom') {
+    const grad = context.createLinearGradient(0, size.height * (1 - scrimSize), 0, size.height)
+    grad.addColorStop(0, 'rgba(0,0,0,0)')
+    grad.addColorStop(1, c1)
+    context.fillStyle = grad
+  } else if (shape === 'scrim-top') {
+    const grad = context.createLinearGradient(0, 0, 0, size.height * scrimSize)
+    grad.addColorStop(0, c1)
+    grad.addColorStop(1, 'rgba(0,0,0,0)')
+    context.fillStyle = grad
+  } else if (shape === 'radial') {
+    const cx = size.width / 2
+    const cy = size.height / 2
+    const r = Math.hypot(cx, cy)
+    const grad = context.createRadialGradient(cx, cy, 0, cx, cy, r)
+    grad.addColorStop(0, c1)
+    grad.addColorStop(1, c2)
+    context.fillStyle = grad
+  } else if (shape === 'linear' || item.colorSecondary) {
     const angle = (item.gradientAngle ?? 135) * (Math.PI / 180)
     const cx = size.width / 2
     const cy = size.height / 2

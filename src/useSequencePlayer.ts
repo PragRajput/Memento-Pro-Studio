@@ -4,11 +4,22 @@ import { getClipTransform, getCssFilter } from './filters.ts'
 import { clamp, locate, timelineDuration } from './timeline.ts'
 import { evaluateTransform, transformToCss } from './transform.ts'
 import type { EvaluatedTransform } from './transform.ts'
-import { locateTransition, transitionAudioGains } from './transitionTimeline.ts'
+import { locateTransition, transitionAudioGains, transitionLayerAlpha, transitionVeilAt, wipeDirection, wipeEdge } from './transitionTimeline.ts'
 import type { MediaClip, TimelineItem, Transition, TransitionType } from './types.ts'
 
 /** How close to an item's out point playback moves on to the next item. */
 const END_TOLERANCE = 0.02
+
+/** Paint the full-frame wash used by the dip and flash transitions. */
+function paintVeil(el: HTMLDivElement | null, veil: { color: string; alpha: number } | null) {
+  if (el === null) return
+  if (veil === null || veil.alpha <= 0.001) {
+    el.style.opacity = '0'
+    return
+  }
+  el.style.backgroundColor = veil.color
+  el.style.opacity = `${veil.alpha}`
+}
 
 function hideElement(el: HTMLElement | null) {
   if (el) el.style.display = 'none'
@@ -49,6 +60,8 @@ export function useSequencePlayer(
   totalDuration?: number,
   imageRef?: RefObject<HTMLImageElement | null>,
   secondaryImageRef?: RefObject<HTMLImageElement | null>,
+  /** Full-frame wash used by the dip and flash transitions. */
+  veilRef?: RefObject<HTMLDivElement | null>,
 ) {
   const [requestedTime, setTime] = useState(0)
   const [playing, setPlaying] = useState(false)
@@ -85,6 +98,16 @@ export function useSequencePlayer(
       if (video === null && image === null) return
 
       const activeTransition = locateTransition(items, transitions, t, clips)
+
+      // The dip and flash types wash the whole frame; the clips themselves only
+      // fade. Painting it here keeps the preview and the exported file identical.
+      paintVeil(
+        veilRef?.current ?? null,
+        activeTransition === null
+          ? null
+          : transitionVeilAt(activeTransition.transition, activeTransition.progress),
+      )
+
       if (activeTransition !== null) {
         const { itemA, itemB, progress, easedProgress, sourceTimeA, sourceTimeB, transition } = activeTransition
         const clipA = clips.get(itemA.clipId)
@@ -115,6 +138,7 @@ export function useSequencePlayer(
               itemB,
               evaluateTransform(itemA, sourceTimeA - itemA.inPoint),
               evaluateTransform(itemB, sourceTimeB - itemB.inPoint),
+              transition,
             )
           }
           return
@@ -192,7 +216,7 @@ export function useSequencePlayer(
         }
       }
     },
-    [videoRef, secondaryVideoRef, imageRef, secondaryImageRef, items, clips, transitions, totalDuration],
+    [videoRef, secondaryVideoRef, imageRef, secondaryImageRef, veilRef, items, clips, transitions, totalDuration],
   )
 
   // While paused, render the frame/photo under the playhead whenever time or items change.
@@ -414,6 +438,7 @@ export function applyTransitionStyle(
   itemB?: TimelineItem | null,
   transformA: EvaluatedTransform = evaluateTransform(itemA, 0),
   transformB: EvaluatedTransform = evaluateTransform(itemB, 0),
+  transition?: Transition | null,
 ) {
   const p = clamp(progress, 0, 1)
 
@@ -441,44 +466,42 @@ export function applyTransitionStyle(
   secondary.style.filter = baseFiltB
   primary.style.clipPath = 'none'
   secondary.style.clipPath = 'none'
+  primary.style.maskImage = ''
+  secondary.style.maskImage = ''
+
+  const strength = transition?.transitionStrength ?? 1
+  const softness = transition?.transitionSoftness ?? 0
 
   if (type === 'crossfade') {
     primary.style.opacity = '1'
     secondary.style.opacity = `${p}`
-  } else if (type === 'fade-black') {
-    if (p < 0.5) {
-      primary.style.opacity = `${1 - p * 2}`
-      secondary.style.opacity = '0'
+  } else if (type === 'fade-black' || type === 'fade-white') {
+    // Both clips just fade; the colour wash itself is painted by the veil
+    // element, exactly as the exporter fills the frame.
+    const alpha = transitionLayerAlpha(type, p)
+    primary.style.opacity = `${clamp(alpha.a, 0, 1)}`
+    secondary.style.opacity = `${clamp(alpha.b, 0, 1)}`
+  } else if (wipeDirection(type) !== null) {
+    primary.style.opacity = '1'
+    secondary.style.opacity = '1'
+    const direction = wipeDirection(type)!
+    const { solid, clear } = wipeEdge(p, softness)
+    if (softness <= 0 || solid >= clear) {
+      // inset() trims from each side, so the kept portion is the complement.
+      const remaining = (1 - p) * 100
+      secondary.style.clipPath =
+        direction === 'left'
+          ? `inset(0 ${remaining}% 0 0)`
+          : direction === 'right'
+            ? `inset(0 0 0 ${remaining}%)`
+            : direction === 'up'
+              ? `inset(0 0 ${remaining}% 0)`
+              : `inset(${remaining}% 0 0 0)`
     } else {
-      primary.style.opacity = '0'
-      secondary.style.opacity = `${(p - 0.5) * 2}`
+      // Same edge positions the exporter feathers its gradient mask over.
+      const towards = { left: 'right', right: 'left', up: 'top', down: 'bottom' }[direction]
+      secondary.style.maskImage = `linear-gradient(to ${towards}, black ${solid * 100}%, transparent ${clear * 100}%)`
     }
-  } else if (type === 'fade-white') {
-    if (p < 0.5) {
-      primary.style.opacity = '1'
-      primary.style.filter = combineFilt(baseFiltA, `brightness(${1 + p * 4})`)
-      secondary.style.opacity = '0'
-    } else {
-      primary.style.opacity = '0'
-      secondary.style.opacity = '1'
-      secondary.style.filter = combineFilt(baseFiltB, `brightness(${1 + (1 - p) * 4})`)
-    }
-  } else if (type === 'wipe-left') {
-    primary.style.opacity = '1'
-    secondary.style.opacity = '1'
-    secondary.style.clipPath = `inset(0 calc(${(1 - p) * 100}%) 0 0)`
-  } else if (type === 'wipe-right') {
-    primary.style.opacity = '1'
-    secondary.style.opacity = '1'
-    secondary.style.clipPath = `inset(0 0 0 calc(${(1 - p) * 100}%))`
-  } else if (type === 'wipe-up') {
-    primary.style.opacity = '1'
-    secondary.style.opacity = '1'
-    secondary.style.clipPath = `inset(0 0 calc(${(1 - p) * 100}%) 0)`
-  } else if (type === 'wipe-down') {
-    primary.style.opacity = '1'
-    secondary.style.opacity = '1'
-    secondary.style.clipPath = `inset(calc(${(1 - p) * 100}%) 0 0 0)`
   } else if (type === 'slide-left') {
     primary.style.opacity = '1'
     secondary.style.opacity = '1'
@@ -490,23 +513,31 @@ export function applyTransitionStyle(
     primary.style.transform = combineTrans(baseTransA, `translateX(${p * 100}%)`)
     secondary.style.transform = combineTrans(baseTransB, `translateX(-${(1 - p) * 100}%)`)
   } else if (type === 'zoom-in') {
-    primary.style.transform = combineTrans(baseTransA, `scale(${1 + p * 0.35})`)
-    primary.style.opacity = `${1 - p * 0.4}`
-    secondary.style.transform = combineTrans(baseTransB, `scale(${1 + (1 - p) * 0.15})`)
-    secondary.style.opacity = `${p}`
+    const alpha = transitionLayerAlpha('zoom-in', p)
+    primary.style.transform = combineTrans(baseTransA, `scale(${1 + p * 0.35 * strength})`)
+    primary.style.opacity = `${alpha.a}`
+    secondary.style.transform = combineTrans(baseTransB, `scale(${1 + (1 - p) * 0.15 * strength})`)
+    secondary.style.opacity = `${alpha.b}`
   } else if (type === 'zoom-out') {
-    primary.style.transform = combineTrans(baseTransA, `scale(${1 - p * 0.15})`)
-    primary.style.opacity = `${1 - p}`
-    secondary.style.transform = combineTrans(baseTransB, `scale(${1.35 - p * 0.35})`)
-    secondary.style.opacity = `${p}`
+    const alpha = transitionLayerAlpha('zoom-out', p)
+    primary.style.transform = combineTrans(baseTransA, `scale(${1 - p * 0.15 * strength})`)
+    primary.style.opacity = `${alpha.a}`
+    secondary.style.transform = combineTrans(baseTransB, `scale(${1 + 0.35 * strength - p * 0.35 * strength})`)
+    secondary.style.opacity = `${alpha.b}`
   } else if (type === 'iris-circle') {
     primary.style.opacity = '1'
     secondary.style.opacity = '1'
-    secondary.style.clipPath = `circle(${p * 75}% at 50% 50%)`
+    if (softness > 0) {
+      const f = softness * 25
+      secondary.style.maskImage = `radial-gradient(circle at 50% 50%, black calc(${p * 75}% - ${f}%), transparent calc(${p * 75}% + ${f}%))`
+    } else {
+      secondary.style.clipPath = `circle(${p * 75}% at 50% 50%)`
+    }
   } else if (type === 'blur-dissolve') {
-    primary.style.filter = combineFilt(baseFiltA, `blur(${p * 16}px)`)
+    const maxB = 16 * strength
+    primary.style.filter = combineFilt(baseFiltA, `blur(${p * maxB}px)`)
     primary.style.opacity = `${1 - p}`
-    secondary.style.filter = combineFilt(baseFiltB, `blur(${(1 - p) * 16}px)`)
+    secondary.style.filter = combineFilt(baseFiltB, `blur(${(1 - p) * maxB}px)`)
     secondary.style.opacity = `${p}`
   }
 

@@ -6,10 +6,10 @@
 .app {
   display: grid;
   grid-template-areas:
-    'header header'
-    'media preview'
-    'timeline timeline';
-  grid-template-columns: 310px 1fr;
+    'header header header'
+    'rail   media   preview'
+    'rail   media   timeline';
+  grid-template-columns: 56px 300px 1fr;
   grid-template-rows: 48px 1fr minmax(290px, 35vh);
   gap: 1px;
   height: 100vh;
@@ -178,6 +178,8 @@
   grid-area: media;
   border-right: 1px solid var(--panel-border);
   overflow-y: auto;
+  /* Spans the preview and timeline rows, so it must be free to shrink and scroll. */
+  min-height: 0;
   outline: 2px dashed transparent;
   outline-offset: -4px;
   transition: outline-color var(--transition-fast), background var(--transition-fast);
@@ -1311,6 +1313,36 @@
   background: var(--panel-header);
   border-top: 1px solid var(--panel-border);
   margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* Pinned below the scrolling body, so Reset and Delete are always reachable. */
+  flex-shrink: 0;
+}
+
+/* Secondary to Delete: same shape, neutral colour, so the destructive action
+   stays the one that stands out. */
+.inspector-reset-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 12px;
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.inspector-reset-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: var(--text);
 }
 
 .inspector-delete-btn {
@@ -1350,12 +1382,20 @@
 .timeline-toolbar {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
   padding: 6px 14px;
   background: var(--panel-header);
   border-bottom: 1px solid var(--panel-border);
   flex-shrink: 0;
   min-height: 42px;
+  /* The toolbar shares its row with the preview column now, so it is narrower
+     than it was. Scroll the tools rather than letting the labels wrap. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.timeline-toolbar::-webkit-scrollbar {
+  height: 0;
 }
 
 .timeline-title-area {
@@ -1473,6 +1513,9 @@
   gap: 6px;
   height: 28px;
   padding: 0 10px;
+  /* Labels stay on one line; the toolbar scrolls instead of reflowing. */
+  white-space: nowrap;
+  flex-shrink: 0;
   border-radius: var(--radius-xs);
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--panel-border);
@@ -1536,6 +1579,7 @@
   font-size: 12px;
   color: var(--text-muted);
   margin-left: auto;
+  flex-shrink: 0;
 }
 
 .zoom-icon {
@@ -2136,12 +2180,24 @@
   margin-bottom: 8px;
 }
 
+/* A thin custom bar. The native <progress> element renders OS chrome, which
+   reads heavy and inconsistent across platforms. */
 .export-progress {
+  position: relative;
   width: 100%;
-  height: 8px;
-  margin-bottom: 10px;
-  accent-color: var(--accent);
-  border-radius: 4px;
+  height: 3px;
+  margin-bottom: 12px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.export-progress-fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: width 160ms linear;
 }
 
 .dialog-actions {
@@ -3561,4 +3617,159 @@
 
 .add-video-layer-btn .tool-icon {
   color: #a5b4fc;
+}
+
+
+/* ============================================================
+   Left panel rail and the browsable libraries behind it
+   ============================================================ */
+
+.side-rail {
+  grid-area: rail;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 6px;
+  background: var(--panel-header);
+  border-right: 1px solid var(--panel-border);
+  min-height: 0;
+}
+
+.side-rail-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 2px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.side-rail-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.side-rail-btn.active {
+  background: rgba(99, 102, 241, 0.16);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: #c7d2fe;
+}
+
+.side-rail-mark {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+.side-rail-label {
+  font-size: 9px;
+  letter-spacing: 0.02em;
+}
+
+.side-panel {
+  grid-area: media;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--panel-border);
+}
+
+.side-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.library-group {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.library-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.library-group-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.library-group-count {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.library-hint {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.library-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.library-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  text-align: left;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text);
+  cursor: grab;
+  transition: all var(--transition-fast);
+}
+
+.library-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.library-card:active {
+  cursor: grabbing;
+}
+
+.library-card.active {
+  border-color: rgba(99, 102, 241, 0.55);
+  background: rgba(99, 102, 241, 0.14);
+}
+
+.library-card-name {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.library-card-desc {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-dim);
+}
+
+/* A clip lit up as a valid drop target while an effect is dragged over it. */
+.timeline-item.effect-drop {
+  box-shadow: inset 0 0 0 2px #818cf8, 0 0 12px rgba(99, 102, 241, 0.55);
+  z-index: 3;
 }

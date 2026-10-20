@@ -13,6 +13,10 @@ import { ExportDialog } from './components/ExportDialog.tsx'
 import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal.tsx'
 import type { MediaSelection } from './components/MediaBin.tsx'
 import { MediaBin } from './components/MediaBin.tsx'
+import { EffectsPanel } from './components/EffectsPanel.tsx'
+import { SideRail } from './components/SideRail.tsx'
+import type { SidePanelId } from './components/SideRail.tsx'
+import { TransitionsPanel } from './components/TransitionsPanel.tsx'
 import { Preview } from './components/Preview.tsx'
 import { Timeline } from './components/Timeline.tsx'
 import { outputSizeForAspectRatio } from './export/plan.ts'
@@ -51,7 +55,7 @@ import {
   createTransition,
   maxTransitionDuration,
 } from './transitionTimeline.ts'
-import type { AnimatableProperty, AspectRatio, AudioClip, AudioTimelineItem, Keyframe, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, TransitionType, VideoLayerItem } from './types.ts'
+import type { AnimatableProperty, AspectRatio, AudioClip, AudioEffectType, AudioTimelineItem, EdgeFades, FilterType, Keyframe, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, TransitionType, VideoLayerItem } from './types.ts'
 import { removeKeyframe, setKeyframe, updateKeyframe } from './keyframes.ts'
 import { useAudioLanePlayback } from './useAudioLanePlayback.ts'
 import { useHistory } from './useHistory.ts'
@@ -73,13 +77,34 @@ function App() {
   const [overlayItems, setOverlayItems] = useState<OverlayItem[]>([])
   const [videoLayers, setVideoLayers] = useState<VideoLayerItem[]>([])
   const [videoLayerCount, setVideoLayerCount] = useState(1)
+  const [sidePanel, setSidePanel] = useState<SidePanelId>('media')
   const [selectedLayerItemId, setSelectedLayerItemId] = useState<string | null>(null)
+
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('16:9')
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
   const [selectedAudioItemId, setSelectedAudioItemId] = useState<string | null>(null)
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null)
   const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null)
   const [selectedTransitionId, setSelectedTransitionId] = useState<string | null>(null)
+  const [edgeFades, setEdgeFades] = useState<EdgeFades>({})
+  /**
+   * Exactly one thing on the timeline is selected at a time. Routing every
+   * selection through here keeps the six selection states mutually exclusive;
+   * clearing them by hand at each call site meant a newly added kind was easy
+   * to miss, which left a stale selection shadowing Delete.
+   */
+  const selectOnly = useCallback(
+    (kind: 'item' | 'audio' | 'text' | 'overlay' | 'layer' | 'transition' | null, id: string | null = null) => {
+      const pick = (owner: typeof kind) => (kind === owner ? id : null)
+      setSelectedItemId(pick('item'))
+      setSelectedAudioItemId(pick('audio'))
+      setSelectedTextId(pick('text'))
+      setSelectedOverlayId(pick('overlay'))
+      setSelectedLayerItemId(pick('layer'))
+      setSelectedTransitionId(pick('transition'))
+    },
+    [],
+  )
   const [showingClip, setShowingClip] = useState(true)
   const [pixelsPerSecond, setPixelsPerSecond] = useState(60)
   const [exportOpen, setExportOpen] = useState(false)
@@ -92,6 +117,7 @@ function App() {
   const timelineImageRef = useRef<HTMLImageElement>(null)
   const timelineSecondaryImageRef = useRef<HTMLImageElement>(null)
   const timelineAudioRef = useRef<HTMLAudioElement>(null)
+  const timelineVeilRef = useRef<HTMLDivElement>(null)
 
   const clipsById = useMemo(() => new Map(clips.map((clip) => [clip.id, clip])), [clips])
   const audioClipsById = useMemo(() => new Map(audioClips.map((clip) => [clip.id, clip])), [audioClips])
@@ -118,8 +144,9 @@ function App() {
       videoLayers,
       transitions,
       aspectRatio,
+      edgeFades,
     }),
-    [items, audioItems, textItems, overlayItems, videoLayers, transitions, aspectRatio],
+    [items, audioItems, textItems, overlayItems, videoLayers, transitions, aspectRatio, edgeFades],
   )
 
   const applySnapshot = useCallback((snapshot: HistorySnapshot) => {
@@ -130,6 +157,7 @@ function App() {
     setVideoLayers(snapshot.videoLayers ?? [])
     setTransitions(snapshot.transitions)
     setAspectRatio(snapshot.aspectRatio)
+    setEdgeFades(snapshot.edgeFades ?? {})
   }, [])
 
   const { canUndo, canRedo, undo, redo } = useHistory(currentSnapshot, applySnapshot, storageLoaded)
@@ -143,6 +171,7 @@ function App() {
     totalDuration,
     timelineImageRef,
     timelineSecondaryImageRef,
+    timelineVeilRef,
   )
 
   useAudioLanePlayback(timelineAudioRef, audioItems, audioClipsById, player.time, player.playing)
@@ -192,6 +221,7 @@ function App() {
     aspectRatio,
     overlayItems,
     videoLayers,
+    edgeFades,
   )
 
   // 1. Rehydrate project from IndexedDB on initial mount
@@ -218,6 +248,9 @@ function App() {
         setAudioTrackCount(restored.audioTrackCount)
         if (restored.aspectRatio) {
           setAspectRatio(restored.aspectRatio)
+        }
+        if (restored.edgeFades) {
+          setEdgeFades(restored.edgeFades)
         }
         if (restored.items.length > 0 || restored.audioItems.length > 0) {
           setShowingClip(false)
@@ -283,6 +316,7 @@ function App() {
         aspectRatio,
         overlayItems,
         videoLayers,
+        edgeFades,
       )
       setSaveStatus('saved')
     }, 800)
@@ -299,6 +333,7 @@ function App() {
     validTransitions,
     effectiveTrackCount,
     aspectRatio,
+    edgeFades,
   ])
 
   // 3. Clear current project and reset to clean state
@@ -314,6 +349,7 @@ function App() {
     setTextItems([])
     setOverlayItems([])
     setVideoLayers([])
+    setEdgeFades({})
     setVideoLayerCount(1)
     setSelectedLayerItemId(null)
     setTransitions([])
@@ -778,6 +814,49 @@ function App() {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, muted: !item.muted } : item)))
   }
 
+  // --- Effects library: apply to whatever is selected ---
+
+  /** The clip a colour look would land on: a base-track clip, or a layer clip. */
+  const selectedClipForEffects =
+    items.find((item) => item.id === validSelectedItemId) ??
+    videoLayers.find((item) => item.id === validSelectedLayerItemId) ??
+    null
+
+  const selectedAudioItem = audioItems.find((item) => item.id === validSelectedAudioItemId) ?? null
+
+  const applyFilterToSelection = (filter: FilterType) => {
+    const base = items.find((item) => item.id === validSelectedItemId)
+    if (base !== undefined) {
+      setItems((current) =>
+        current.map((item) => (item.id === base.id ? { ...item, filter } : item)),
+      )
+      return
+    }
+    const layer = videoLayers.find((item) => item.id === validSelectedLayerItemId)
+    if (layer !== undefined) updateVideoLayerItem({ ...layer, filter })
+  }
+
+  const applyAudioEffectToSelection = (effect: AudioEffectType) => {
+    if (selectedAudioItem === null) return
+    updateAudioItem({ ...selectedAudioItem, effect })
+  }
+
+  /** Drop a colour look straight onto a clip, without selecting it first. */
+  const applyFilterToItem = (itemId: string, filter: FilterType) => {
+    if (items.some((item) => item.id === itemId)) {
+      setItems((current) => current.map((item) => (item.id === itemId ? { ...item, filter } : item)))
+      return
+    }
+    const layer = videoLayers.find((item) => item.id === itemId)
+    if (layer !== undefined) updateVideoLayerItem({ ...layer, filter })
+  }
+
+  const applyAudioEffectToItem = (itemId: string, effect: AudioEffectType) => {
+    setAudioItems((current) =>
+      current.map((item) => (item.id === itemId ? { ...item, effect } : item)),
+    )
+  }
+
   const updateTimelineItem = (updated: TimelineItem) => {
     setItems((current) => current.map((item) => (item.id === updated.id ? updated : item)))
   }
@@ -994,7 +1073,7 @@ function App() {
 
           {/* Project Aspect Ratio Selector */}
           <div className="header-aspect-ratio-group" title="Project Canvas Aspect Ratio">
-            <span className="aspect-ratio-icon" aria-hidden="true">📐</span>
+            <span className="aspect-ratio-icon" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2" /></svg></span>
             <select
               className="aspect-ratio-select"
               value={aspectRatio}
@@ -1046,20 +1125,43 @@ function App() {
           </button>
         </div>
       </header>
-      <MediaBin
-        clips={clips}
-        audioClips={audioClips}
-        selection={showingClip ? selection : null}
-        importing={importing}
-        errors={errors}
-        onImport={importFiles}
-        onSelectVideo={selectVideoClip}
-        onSelectAudio={selectAudioClip}
-        onRemoveVideo={removeClip}
-        onRemoveAudio={removeAudioClip}
-        onAddVideoToTimeline={(clipId) => addToTimeline(clipId)}
-        onAddAudioToTimeline={(clipId) => addAudioToTimeline(clipId)}
-      />
+      <SideRail active={sidePanel} onSelect={setSidePanel} />
+
+      {sidePanel === 'media' && (
+        <MediaBin
+          clips={clips}
+          audioClips={audioClips}
+          selection={showingClip ? selection : null}
+          importing={importing}
+          errors={errors}
+          onImport={importFiles}
+          onSelectVideo={selectVideoClip}
+          onSelectAudio={selectAudioClip}
+          onRemoveVideo={removeClip}
+          onRemoveAudio={removeAudioClip}
+          onAddVideoToTimeline={(clipId) => addToTimeline(clipId)}
+          onAddAudioToTimeline={(clipId) => addAudioToTimeline(clipId)}
+        />
+      )}
+
+      {sidePanel === 'effects' && (
+        <EffectsPanel
+          selectedClipFilter={selectedClipForEffects?.filter ?? null}
+          selectedAudioEffect={selectedAudioItem?.effect ?? null}
+          onApplyFilter={applyFilterToSelection}
+          onApplyAudioEffect={applyAudioEffectToSelection}
+        />
+      )}
+
+      {sidePanel === 'transitions' && (
+        <TransitionsPanel
+          selectedType={selectedTransition?.type ?? null}
+          canApply={selectedTransition !== null}
+          onApply={(type) => {
+            if (selectedTransition !== null) updateTransition({ ...selectedTransition, type })
+          }}
+        />
+      )}
       <Preview
         selection={showingClip ? selection : null}
         videoClips={clipsById}
@@ -1067,19 +1169,18 @@ function App() {
         timelineEmpty={items.length === 0 && audioItems.length === 0 && textItems.length === 0 && overlayItems.length === 0}
         hasVideo={items.length > 0}
         aspectRatio={aspectRatio}
+        timelineItems={items}
+        edgeFades={edgeFades}
+        totalDuration={totalDuration}
         timelineVideoRef={timelineVideoRef}
         timelineAudioRef={timelineAudioRef}
+        timelineVeilRef={timelineVeilRef}
         textItems={textItems}
         selectedTextId={validSelectedTextId}
         time={player.time}
         playing={player.playing}
         onSelectText={(id) => {
-          setSelectedTextId(id)
-          if (id !== null) {
-            setSelectedItemId(null)
-            setSelectedAudioItemId(null)
-            setSelectedTransitionId(null)
-          }
+          selectOnly(id === null ? null : 'text', id)
           showTimeline()
         }}
         onUpdateText={updateText}
@@ -1092,7 +1193,7 @@ function App() {
         onUpdateTimelineItem={updateTimelineItem}
         onDeleteTimelineItem={deleteTimelineItem}
         onCloseTimelineInspector={() => setSelectedItemId(null)}
-        selectedAudioItem={audioItems.find((item) => item.id === validSelectedAudioItemId) ?? null}
+        selectedAudioItem={selectedAudioItem}
         selectedAudioClipName={
           validSelectedAudioItemId
             ? audioClipsById.get(audioItems.find((item) => item.id === validSelectedAudioItemId)?.clipId ?? '')?.name
@@ -1122,13 +1223,7 @@ function App() {
         overlayItems={overlayItems}
         selectedOverlayId={validSelectedOverlayId}
         onSelectOverlay={(id) => {
-          setSelectedOverlayId(id)
-          if (id !== null) {
-            setSelectedItemId(null)
-            setSelectedAudioItemId(null)
-            setSelectedTextId(null)
-            setSelectedTransitionId(null)
-          }
+          selectOnly(id === null ? null : 'overlay', id)
           showTimeline()
         }}
         onUpdateOverlay={updateOverlay}
@@ -1172,11 +1267,7 @@ function App() {
         onSplit={split}
         onDelete={deleteSelectedItem}
         onSelectItem={(id) => {
-          setSelectedItemId(id)
-          setSelectedAudioItemId(null)
-          setSelectedTextId(null)
-          setSelectedOverlayId(null)
-          setSelectedTransitionId(null)
+          selectOnly(id === null ? null : 'item', id)
           showTimeline()
         }}
         onAddClip={addToTimeline}
@@ -1189,13 +1280,7 @@ function App() {
         transitions={validTransitions}
         selectedTransitionId={validSelectedTransitionId}
         onSelectTransition={(id) => {
-          setSelectedTransitionId(id)
-          if (id !== null) {
-            setSelectedItemId(null)
-            setSelectedAudioItemId(null)
-            setSelectedTextId(null)
-            setSelectedOverlayId(null)
-          }
+          selectOnly(id === null ? null : 'transition', id)
           showTimeline()
         }}
         onAddTransition={addTransition}
@@ -1204,11 +1289,7 @@ function App() {
         selectedAudioItemId={validSelectedAudioItemId}
         audioTrackCount={effectiveTrackCount}
         onSelectAudioItem={(id) => {
-          setSelectedAudioItemId(id)
-          setSelectedItemId(null)
-          setSelectedTextId(null)
-          setSelectedOverlayId(null)
-          setSelectedTransitionId(null)
+          selectOnly(id === null ? null : 'audio', id)
           showTimeline()
         }}
         onAddAudioClip={addAudioToTimeline}
@@ -1220,13 +1301,7 @@ function App() {
         textItems={textItems}
         selectedTextId={validSelectedTextId}
         onSelectTextItem={(id) => {
-          setSelectedTextId(id)
-          if (id !== null) {
-            setSelectedItemId(null)
-            setSelectedAudioItemId(null)
-            setSelectedOverlayId(null)
-            setSelectedTransitionId(null)
-          }
+          selectOnly(id === null ? null : 'text', id)
           showTimeline()
         }}
         onAddText={addTextOverlay}
@@ -1235,37 +1310,26 @@ function App() {
         overlayItems={overlayItems}
         selectedOverlayId={validSelectedOverlayId}
         onSelectOverlayItem={(id) => {
-          setSelectedOverlayId(id)
-          if (id !== null) {
-            setSelectedItemId(null)
-            setSelectedAudioItemId(null)
-            setSelectedTextId(null)
-            setSelectedTransitionId(null)
-          }
+          selectOnly(id === null ? null : 'overlay', id)
           showTimeline()
         }}
         onAddOverlay={addOverlay}
         onMoveOverlayItem={moveOverlay}
         onTrimOverlayItem={trimOverlay}
         onAddMediaOverlay={addMediaOverlay}
+        onApplyFilterToItem={applyFilterToItem}
+        onApplyAudioEffectToItem={applyAudioEffectToItem}
         videoLayers={videoLayers}
         videoLayerCount={videoLayerCount}
         selectedLayerItemId={validSelectedLayerItemId}
-        onSelectLayerItem={(id) => {
-          setSelectedLayerItemId(id)
-          if (id !== null) {
-            setSelectedItemId(null)
-            setSelectedAudioItemId(null)
-            setSelectedTextId(null)
-            setSelectedOverlayId(null)
-            setSelectedTransitionId(null)
-          }
-        }}
+        onSelectLayerItem={(id) => selectOnly(id === null ? null : 'layer', id)}
         onAddClipToLayer={(clipId, trackIndex, start) => addClipToVideoLayer(clipId, trackIndex, start)}
         onMoveLayerItem={moveVideoLayerItem}
         onTrimLayerItem={trimVideoLayerItem}
         onAddVideoLayer={addVideoLayerTrack}
         onRemoveVideoLayer={removeVideoLayerTrack}
+        edgeFades={edgeFades}
+        onUpdateEdgeFades={setEdgeFades}
       />
       {exportOpen && (
         <ExportDialog

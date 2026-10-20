@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AspectRatio, AudioTimelineItem, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from './types.ts'
+import type { AspectRatio, AudioTimelineItem, EdgeFades, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from './types.ts'
 
 export interface HistorySnapshot {
   items: TimelineItem[]
@@ -9,6 +9,7 @@ export interface HistorySnapshot {
   videoLayers?: VideoLayerItem[]
   transitions: Transition[]
   aspectRatio: AspectRatio
+  edgeFades?: EdgeFades
 }
 
 const MAX_HISTORY = 40

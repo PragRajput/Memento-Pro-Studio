@@ -24,7 +24,6 @@ export interface FilterPreset {
   id: FilterType
   name: string
   description: string
-  icon: string
 }
 
 /** A 4x5 colour matrix in feColorMatrix row-major order. */
@@ -214,19 +213,19 @@ const LOOKS: Partial<Record<FilterType, LookDefinition>> = {
 }
 
 export const FILTER_PRESETS: readonly FilterPreset[] = [
-  { id: 'none', name: 'Normal', description: 'Original footage colours', icon: '✨' },
-  { id: 'auto', name: 'Auto Fix', description: 'Gentle one-click contrast and life', icon: '🪄' },
-  { id: 'cinematic', name: 'Cinematic', description: 'Teal shadows, warm highlights', icon: '🎬' },
-  { id: 'noir', name: 'Noir B&W', description: 'Orange-filtered monochrome, dark skies', icon: '🎞️' },
-  { id: 'vintage', name: 'Vintage 70s', description: 'Warm faded print with lifted blacks', icon: '📻' },
-  { id: 'warm', name: 'Golden Hour', description: 'Sunlit warmth that keeps skin natural', icon: '🌅' },
-  { id: 'cool', name: 'Nordic Frost', description: 'Cool daylight without turning faces blue', icon: '❄️' },
-  { id: 'moody', name: 'Moody', description: 'Desaturated with cool shadows', icon: '🌫️' },
-  { id: 'faded', name: 'Faded Matte', description: 'Lifted blacks, soft highlights', icon: '🌾' },
-  { id: 'cyberpunk', name: 'Cyberpunk', description: 'Neon magenta and cyan', icon: '🌆' },
-  { id: 'vivid', name: 'Vivid Pop', description: 'Lush colour without clipping', icon: '🌺' },
-  { id: 'sepia', name: 'Sepia Antique', description: 'Parchment and early photography', icon: '📜' },
-  { id: 'bleach', name: 'Bleach Bypass', description: 'Gritty silver retention', icon: '⚔️' },
+  { id: 'none', name: 'Normal', description: 'Original footage colours' },
+  { id: 'auto', name: 'Auto Fix', description: 'Gentle one-click contrast and life' },
+  { id: 'cinematic', name: 'Cinematic', description: 'Teal shadows, warm highlights' },
+  { id: 'noir', name: 'Noir B&W', description: 'Orange-filtered monochrome, dark skies' },
+  { id: 'vintage', name: 'Vintage 70s', description: 'Warm faded print with lifted blacks' },
+  { id: 'warm', name: 'Golden Hour', description: 'Sunlit warmth that keeps skin natural' },
+  { id: 'cool', name: 'Nordic Frost', description: 'Cool daylight without turning faces blue' },
+  { id: 'moody', name: 'Moody', description: 'Desaturated with cool shadows' },
+  { id: 'faded', name: 'Faded Matte', description: 'Lifted blacks, soft highlights' },
+  { id: 'cyberpunk', name: 'Cyberpunk', description: 'Neon magenta and cyan' },
+  { id: 'vivid', name: 'Vivid Pop', description: 'Lush colour without clipping' },
+  { id: 'sepia', name: 'Sepia Antique', description: 'Parchment and early photography' },
+  { id: 'bleach', name: 'Bleach Bypass', description: 'Gritty silver retention' },
 ]
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value))
@@ -250,9 +249,12 @@ interface Grade {
   highlights: number
   shadows: number
   fade: number
+  vignette: number
+  grain: number
+  sharpen: number
 }
 
-const readGrade = (item: TimelineItem | null | undefined): Grade => ({
+export const readGrade = (item: TimelineItem | null | undefined): Grade => ({
   exposure: item?.filterExposure ?? 0,
   contrast: item?.filterContrast ?? 0,
   saturation: item?.filterSaturation ?? 0,
@@ -261,6 +263,9 @@ const readGrade = (item: TimelineItem | null | undefined): Grade => ({
   highlights: item?.filterHighlights ?? 0,
   shadows: item?.filterShadows ?? 0,
   fade: item?.filterFade ?? 0,
+  vignette: item?.filterVignette ?? 0,
+  grain: item?.filterGrain ?? 0,
+  sharpen: item?.filterSharpen ?? 0,
 })
 
 const isNeutralGrade = (grade: Grade) => Object.values(grade).every((value) => value === 0)
@@ -385,6 +390,21 @@ export const getCssFilter = (
           '</feComponentTransfer>',
       )
     }
+    if (grade.sharpen > 0) {
+      const k = (grade.sharpen / 100) * 0.75
+      const c = 1 + 4 * k
+      parts.push(
+        `<feConvolveMatrix order="3" kernelMatrix="0 ${(-k).toFixed(4)} 0 ${(-k).toFixed(4)} ${c.toFixed(4)} ${(-k).toFixed(4)} 0 ${(-k).toFixed(4)} 0" preserveAlpha="true"/>`,
+      )
+    }
+    if (grade.grain > 0) {
+      const grainAlpha = ((grade.grain / 100) * 0.35).toFixed(4)
+      parts.push(
+        `<feTurbulence type="fractalNoise" baseFrequency="0.75" numOctaves="3" result="grainNoise"/>` +
+          `<feColorMatrix type="matrix" in="grainNoise" result="grainMono" values="0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 0 0.5  0 0 0 ${grainAlpha} 0"/>` +
+          `<feBlend mode="overlay" in2="SourceGraphic" in="grainMono"/>`,
+      )
+    }
   }
 
   if (parts.length === 0) return 'none'
@@ -406,6 +426,18 @@ export const getCssFilter = (
     defined.add(id)
   }
   return `url(#${id})`
+}
+
+/**
+ * Vignette geometry, shared so the preview and the exporter draw the same falloff.
+ * `clearStop` is where the darkening begins, as a fraction of the distance from
+ * the frame centre to its corner; `peakAlpha` is the opacity at the corner.
+ */
+export const VIGNETTE = { clearStop: 0.42, peakAlpha: 0.85 } as const
+
+/** Opacity of the vignette wash at the frame edge for a 0..100 strength. */
+export function vignetteAlpha(strength: number | undefined): number {
+  return VIGNETTE.peakAlpha * Math.min(1, Math.max(0, (strength ?? 0) / 100))
 }
 
 /** True when this clip carries any manual grading beyond its preset. */

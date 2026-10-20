@@ -1,4 +1,5 @@
 import { AUDIO_EFFECT_PRESETS } from '../audioEffects.ts'
+import { resetAudioItem } from '../resetSettings.ts'
 import { clamp } from '../timeline.ts'
 import type { AudioEffectType, AudioTimelineItem } from '../types.ts'
 
@@ -135,7 +136,6 @@ export function AudioInspector({
                   onClick={() => handleEffectSelect(preset.id)}
                   title={preset.description}
                 >
-                  <span className="audio-effect-icon">{preset.icon}</span>
                   <span className="audio-effect-name">{preset.name}</span>
                 </button>
               )
@@ -249,6 +249,18 @@ export function AudioInspector({
       </div>
 
       <div className="inspector-footer">
+        <button
+          type="button"
+          className="inspector-reset-btn"
+          onClick={() => onChange?.(resetAudioItem(item))}
+          title="Full volume, no fades, no effect"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="1 4 1 10 7 10" />
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+          </svg>
+          Reset Audio
+        </button>
         <button
           type="button"
           className="inspector-delete-btn"

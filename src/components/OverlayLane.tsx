@@ -159,21 +159,21 @@ export function OverlayLane({
         const width = item.duration * pps
 
         let label = 'Overlay'
-        let icon = '✨'
+        let icon = 'FX'
         if (item.category === 'media') {
           const clip = mediaClips.get(item.clipId ?? '')
           label = `PiP: ${clip?.name ?? 'Media'}`
-          icon = '🖼️'
+          icon = 'PIP'
         } else if (item.category === 'vfx') {
           const preset = VFX_OVERLAY_PRESETS.find((p) => p.id === item.vfxType)
           label = preset?.name ?? 'Visual FX'
-          icon = preset?.icon ?? '✨'
+          icon = 'FX'
         } else if (item.category === 'lower-third') {
           label = item.title || 'Lower Third'
-          icon = '📺'
+          icon = 'L3'
         } else if (item.category === 'color') {
           label = 'Color Tint'
-          icon = '🎨'
+          icon = 'COL'
         }
 
         return (

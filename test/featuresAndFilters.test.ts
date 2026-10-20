@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { outputSizeForAspectRatio, planFrames } from '../src/export/plan.ts'
-import { FILTER_PRESETS, getClipTransform, getCssFilter, hasManualGrade } from '../src/filters.ts'
+import { FILTER_PRESETS, VIGNETTE, getClipTransform, getCssFilter, hasManualGrade, readGrade, vignetteAlpha } from '../src/filters.ts'
 import { itemLength, locate, timelineDuration } from '../src/timeline.ts'
 import type { TimelineItem } from '../src/types.ts'
 
@@ -44,7 +44,6 @@ describe('Filters & Color Grading Presets', () => {
     for (const preset of FILTER_PRESETS) {
       assert.ok(preset.name.length > 0, `${preset.id} needs a name`)
       assert.ok(preset.description.length > 0, `${preset.id} needs a description`)
-      assert.ok(preset.icon.length > 0, `${preset.id} needs an icon`)
     }
   })
 
@@ -72,6 +71,24 @@ describe('Filters & Color Grading Presets', () => {
     assert.equal(hasManualGrade({ ...baseItem, filterShadows: -5 }), true)
     // A zeroed control is not a grade; it is the neutral position.
     assert.equal(hasManualGrade({ ...baseItem, filterExposure: 0 }), false)
+    assert.equal(hasManualGrade({ ...baseItem, filterVignette: 40 }), true)
+    assert.equal(hasManualGrade({ ...baseItem, filterGrain: 15 }), true)
+    assert.equal(hasManualGrade({ ...baseItem, filterSharpen: 30 }), true)
+    assert.equal(hasManualGrade({ ...baseItem, filterVignette: 0 }), false)
+  })
+
+  it('reads manual grading values including vignette, grain, and sharpen', () => {
+    const grade = readGrade({
+      ...baseItem,
+      filterExposure: 10,
+      filterVignette: 25,
+      filterGrain: 50,
+      filterSharpen: 75,
+    })
+    assert.equal(grade.exposure, 10)
+    assert.equal(grade.vignette, 25)
+    assert.equal(grade.grain, 50)
+    assert.equal(grade.sharpen, 75)
   })
 })
 
@@ -141,5 +158,25 @@ describe('Variable Playback Speed on Timeline', () => {
     assert.notEqual(pos2, null)
     assert.equal(pos2?.index, 1)
     assert.equal(pos2?.offset, 1)
+  })
+})
+
+describe('Vignette geometry', () => {
+  it('scales opacity with strength and clamps at both ends', () => {
+    assert.equal(vignetteAlpha(0), 0)
+    assert.equal(vignetteAlpha(100), VIGNETTE.peakAlpha)
+    assert.equal(vignetteAlpha(50), VIGNETTE.peakAlpha / 2)
+    assert.equal(vignetteAlpha(500), VIGNETTE.peakAlpha)
+    assert.equal(vignetteAlpha(-20), 0)
+  })
+
+  it('treats an unset strength as no vignette', () => {
+    assert.equal(vignetteAlpha(undefined), 0)
+  })
+
+  it('keeps a clear centre before the falloff begins', () => {
+    // Both renderers read this one constant; they used to hard-code 40% and 45%
+    // independently, so the exported vignette was tighter than the preview's.
+    assert.ok(VIGNETTE.clearStop > 0 && VIGNETTE.clearStop < 1)
   })
 })

@@ -45,7 +45,18 @@ export function ExportDialog({ state, outputLabel, duration, onStart, onCancel, 
 
         {state.status === 'running' && (
           <>
-            <progress className="export-progress" max={1} value={state.fraction} />
+            <div
+              className="export-progress"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.floor(state.fraction * 100)}
+            >
+              <span
+                className="export-progress-fill"
+                style={{ width: `${Math.max(2, state.fraction * 100)}%` }}
+              />
+            </div>
             <p className="dialog-note" aria-live="polite">
               {state.stage} · {Math.floor(state.fraction * 100)}%
             </p>

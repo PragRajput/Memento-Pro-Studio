@@ -6,6 +6,7 @@ import { ClipInspector } from './ClipInspector.tsx'
 import { OverlayInspector } from './OverlayInspector.tsx'
 import { TextInspector } from './TextInspector.tsx'
 import { TransitionInspector } from './TransitionInspector.tsx'
+import { VIGNETTE, vignetteAlpha } from '../filters.ts'
 import {
   VFX_OVERLAY_PRESETS,
   grainTileHeightFraction,
@@ -15,10 +16,12 @@ import {
   pipSourceTime,
   sortOverlaysForPaint,
 } from '../overlayDraw.ts'
-import { blockLeft, blockTop, resolveTextStyle } from '../textStyle.ts'
+import { blockLeft, blockTop, resolveTextStyle, textAnimationAt } from '../textStyle.ts'
+import { edgeFadeAt } from '../transitionTimeline.ts'
+import { locate } from '../timeline.ts'
 import { VideoLayerStage } from './VideoLayerStage.tsx'
 import { VideoLayerInspector } from './VideoLayerInspector.tsx'
-import type { AnimatableProperty, AspectRatio, AudioClip, AudioTimelineItem, EasingType, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from '../types.ts'
+import type { AnimatableProperty, AspectRatio, AudioClip, AudioTimelineItem, EasingType, EdgeFades, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from '../types.ts'
 
 function PipVideo({
   src,
@@ -132,11 +135,15 @@ interface PreviewProps {
   timelineEmpty: boolean
   hasVideo: boolean
   aspectRatio?: AspectRatio
+  timelineItems?: TimelineItem[]
+  edgeFades?: EdgeFades
+  totalDuration?: number
   timelineVideoRef: RefObject<HTMLVideoElement | null>
   secondaryVideoRef?: RefObject<HTMLVideoElement | null>
   timelineImageRef?: RefObject<HTMLImageElement | null>
   secondaryImageRef?: RefObject<HTMLImageElement | null>
   timelineAudioRef: RefObject<HTMLAudioElement | null>
+  timelineVeilRef?: RefObject<HTMLDivElement | null>
   textItems: TextOverlay[]
   selectedTextId: string | null
   time: number
@@ -192,11 +199,15 @@ export function Preview({
   timelineEmpty,
   hasVideo,
   aspectRatio = '16:9',
+  timelineItems = [],
+  edgeFades,
+  totalDuration = 0,
   timelineVideoRef,
   secondaryVideoRef,
   timelineImageRef,
   secondaryImageRef,
   timelineAudioRef,
+  timelineVeilRef,
   textItems,
   selectedTextId,
   time,
@@ -273,6 +284,11 @@ export function Preview({
   // positioned siblings, so z-index alone decides the stack and the four render
   // passes below can stay grouped by category.
   const overlayZIndex = new Map(visibleOverlays.map((item, index) => [item.id, index + 2]))
+
+  const activeEdgeFade = edgeFadeAt(edgeFades, time, totalDuration)
+  const pos = locate(timelineItems, time)
+  const activeClipItem = pos !== null ? timelineItems[pos.index] : null
+  const activeClipVignette = activeClipItem?.filterVignette ?? 0
 
   const stageRef = useRef<HTMLDivElement>(null)
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 })
@@ -470,23 +486,37 @@ export function Preview({
               {/* Color Wash Overlays */}
               {visibleOverlays
                 .filter((o) => o.category === 'color')
-                .map((overlay) => (
-                  <div
-                    key={overlay.id}
-                    className="preview-color-overlay"
-                    style={{
-                      position: 'absolute',
-                      inset: 0,
-                      ...overlayAnimationStyle(overlay, time, { opacity: overlay.opacity ?? 0.3 }),
-                      mixBlendMode: overlay.blendMode ?? 'overlay',
-                      background: overlay.colorSecondary
-                        ? `linear-gradient(${overlay.gradientAngle ?? 135}deg, ${overlay.color ?? '#f97316'}, ${overlay.colorSecondary})`
-                        : (overlay.color ?? '#f97316'),
-                      pointerEvents: 'none',
-                      zIndex: overlayZIndex.get(overlay.id) ?? 2,
-                    }}
-                  />
-                ))}
+                .map((overlay) => {
+                  const shape = overlay.colorWashShape ?? (overlay.colorSecondary ? 'linear' : 'flat')
+                  const c1 = overlay.color ?? '#f97316'
+                  const c2 = overlay.colorSecondary ?? c1
+                  const scrimPct = (overlay.colorWashScrimSize ?? 0.5) * 100
+                  let bg = c1
+                  if (shape === 'scrim-bottom') {
+                    bg = `linear-gradient(to bottom, transparent ${100 - scrimPct}%, ${c1})`
+                  } else if (shape === 'scrim-top') {
+                    bg = `linear-gradient(to top, transparent ${100 - scrimPct}%, ${c1})`
+                  } else if (shape === 'radial') {
+                    bg = `radial-gradient(circle, ${c1}, ${c2})`
+                  } else if (shape === 'linear' || overlay.colorSecondary) {
+                    bg = `linear-gradient(${overlay.gradientAngle ?? 135}deg, ${c1}, ${c2})`
+                  }
+                  return (
+                    <div
+                      key={overlay.id}
+                      className="preview-color-overlay"
+                      style={{
+                        position: 'absolute',
+                        inset: 0,
+                        ...overlayAnimationStyle(overlay, time, { opacity: overlay.opacity ?? 0.3 }),
+                        mixBlendMode: overlay.blendMode ?? 'overlay',
+                        background: bg,
+                        pointerEvents: 'none',
+                        zIndex: overlayZIndex.get(overlay.id) ?? 2,
+                      }}
+                    />
+                  )
+                })}
 
               {/* Visual FX Overlays */}
               {visibleOverlays
@@ -497,7 +527,14 @@ export function Preview({
                   const isSelected = overlay.id === selectedOverlayId
 
                   if (type === 'letterbox') {
-                    const barHeight = Math.round(12.5 * intensity)
+                    const ratioStr = overlay.vfxLetterboxRatio ?? '2.35'
+                    const targetRatio = ratioStr === '4:3' ? 4 / 3 : parseFloat(ratioStr) || 2.35
+                    const frameRatio = 16 / 9
+                    let barHeight = Math.round(12.5 * intensity)
+                    if (targetRatio > frameRatio) {
+                      const visibleHeightFrac = frameRatio / targetRatio
+                      barHeight = Math.max(0, Math.round(((1 - visibleHeightFrac) / 2) * 100 * intensity))
+                    }
                     return (
                       <div
                         key={overlay.id}
@@ -510,6 +547,8 @@ export function Preview({
                   }
 
                   if (type === 'vignette') {
+                    const feather = Math.round((overlay.vfxVignetteFeather ?? 0.45) * 100)
+                    const color = overlay.vfxVignetteColor ?? '#000000'
                     return (
                       <div
                         key={overlay.id}
@@ -517,8 +556,8 @@ export function Preview({
                         style={{
                           position: 'absolute',
                           inset: 0,
-                          background: `radial-gradient(circle, transparent 40%, rgba(0,0,0,${0.85 * intensity}) 100%)`,
-                          ...overlayAnimationStyle(overlay, time, { opacity: overlay.opacity ?? 1 }),
+                          background: `radial-gradient(circle, transparent ${feather}%, ${color} 100%)`,
+                          ...overlayAnimationStyle(overlay, time, { opacity: (overlay.opacity ?? 1) * intensity }),
                           mixBlendMode: overlay.blendMode && overlay.blendMode !== 'normal' ? overlay.blendMode : undefined,
                           pointerEvents: 'none',
                           zIndex: overlayZIndex.get(overlay.id) ?? 2,
@@ -571,6 +610,14 @@ export function Preview({
                   const clip = videoClips.get(overlay.clipId ?? '')
                   if (!clip) return null
                   const isSelected = overlay.id === selectedOverlayId
+                  const shape = overlay.pipShape ?? 'rounded'
+                  const isCircle = shape === 'circle'
+                  const shadowCss = overlay.pipShadow
+                    ? `0 ${(overlay.pipShadowY ?? 8)}px ${(overlay.pipShadowBlur ?? 16)}px rgba(0, 0, 0, ${overlay.pipShadowOpacity ?? 0.55})`
+                    : undefined
+                  const transforms = ['translate(-50%, -50%)']
+                  if (overlay.pipRotation) transforms.push(`rotate(${overlay.pipRotation}deg)`)
+                  if (overlay.pipFlipH) transforms.push('scaleX(-1)')
 
                   return (
                     <div
@@ -582,14 +629,15 @@ export function Preview({
                         top: `${overlay.y ?? 50}%`,
                         width: `${overlay.width ?? 30}%`,
                         ...overlayAnimationStyle(overlay, time, {
-                          transform: 'translate(-50%, -50%)',
+                          transform: transforms.join(' '),
                           opacity: overlay.opacity ?? 1,
                         }),
-                        borderRadius: `${overlay.borderRadius ?? 0}px`,
+                        borderRadius: isCircle ? '50%' : `${overlay.borderRadius ?? (shape === 'rect' ? 0 : 8)}px`,
                         border:
                           overlay.borderWidth && overlay.borderWidth > 0
                             ? `${overlay.borderWidth}px solid ${overlay.borderColor ?? '#fff'}`
                             : undefined,
+                        boxShadow: shadowCss,
                         mixBlendMode:
                           overlay.blendMode && overlay.blendMode !== 'normal' ? overlay.blendMode : undefined,
                         overflow: 'hidden',
@@ -630,6 +678,7 @@ export function Preview({
                   const title = overlay.title || 'Speaker Name'
                   const subtitle = overlay.subtitle || 'Role / Title'
                   const accent = overlay.accentColor ?? '#3b82f6'
+                  const l3Scale = overlay.lowerThirdScale ?? 1
 
                   return (
                     <div
@@ -639,6 +688,8 @@ export function Preview({
                         position: 'absolute',
                         left: `${overlay.x ?? 8}%`,
                         top: `${overlay.y ?? 82}%`,
+                        transform: `scale(${l3Scale})`,
+                        transformOrigin: 'bottom left',
                         ...overlayAnimationStyle(overlay, time, { opacity: overlay.opacity ?? 1 }),
                         cursor: 'grab',
                         zIndex: overlayZIndex.get(overlay.id) ?? 2,
@@ -683,16 +734,37 @@ export function Preview({
               {stageSize.height > 0 &&
                 visibleTexts.map((title) => {
                   const isSelected = title.id === selectedTextId
-                  // Resolved against the stage's real pixel size with the same
-                  // function the export uses against the output size, so the title
-                  // occupies the same fraction of the frame in both.
+                  const anim = textAnimationAt(title, time)
+                  if (anim.opacity <= 0.001) return null
+
                   const style = resolveTextStyle(title, stageSize)
+                  let charsLeft = anim.visibleChars ?? Number.POSITIVE_INFINITY
+                  const linesToDraw = style.lines.map((line) => {
+                    if (charsLeft <= 0) return ''
+                    if (line.length <= charsLeft) {
+                      charsLeft -= line.length
+                      return line
+                    }
+                    const sub = line.slice(0, charsLeft)
+                    charsLeft = 0
+                    return sub
+                  })
+
                   const shadow = style.shadowBlurPx > 0
                     ? `${style.shadowOffsetXPx}px ${style.shadowOffsetYPx}px ${style.shadowBlurPx}px ${style.shadowColor}`
                     : undefined
+                  const glow = style.glowBlurPx > 0 && style.glowColor
+                    ? `0 0 ${style.glowBlurPx}px ${style.glowColor}`
+                    : undefined
+                  const combinedShadow = [shadow, glow].filter(Boolean).join(', ') || undefined
                   const stroke = style.strokePx > 0
                     ? `${style.strokePx}px ${style.strokeColor}`
                     : undefined
+
+                  const transforms: string[] = []
+                  if (style.rotation !== 0) transforms.push(`rotate(${style.rotation}deg)`)
+                  if (anim.scale !== 1) transforms.push(`scale(${anim.scale})`)
+                  if (anim.offsetY !== 0) transforms.push(`translateY(${anim.offsetY * 100}%)`)
 
                   return (
                     <div
@@ -706,12 +778,13 @@ export function Preview({
                         letterSpacing: `${style.letterSpacingPx}px`,
                         lineHeight: `${style.lineHeightPx}px`,
                         color: style.color,
-                        opacity: style.opacity,
+                        opacity: style.opacity * anim.opacity,
+                        transform: transforms.length > 0 ? transforms.join(' ') : undefined,
                         textAlign: style.textAlign,
                         padding: `${style.bgPadYPx}px ${style.bgPadXPx}px`,
                         borderRadius: `${style.bgRadiusPx}px`,
                         backgroundColor: style.bgColor ?? undefined,
-                        textShadow: shadow,
+                        textShadow: combinedShadow,
                         WebkitTextStroke: stroke,
                         paintOrder: 'stroke fill',
                       }}
@@ -722,19 +795,75 @@ export function Preview({
                         onSelectText(title.id)
                       }}
                     >
-                      {style.lines.map((line, index) => (
+                      {linesToDraw.map((line, index) => (
                         <div key={index}>{line === '' ? '\u00a0' : line}</div>
                       ))}
                     </div>
                   )
                 })}
+
+              {/* Active Clip Vignette */}
+              {activeClipVignette > 0 && (
+                <div
+                  className="preview-clip-vignette"
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    background: `radial-gradient(circle, transparent ${VIGNETTE.clearStop * 100}%, rgba(0,0,0,${vignetteAlpha(activeClipVignette).toFixed(3)}) 100%)`,
+                    pointerEvents: 'none',
+                    zIndex: 1,
+                  }}
+                />
+              )}
+
+              {/* Dip / flash wash, painted imperatively by the player. */}
+              <div
+                ref={timelineVeilRef}
+                className="preview-transition-veil"
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  opacity: 0,
+                  pointerEvents: 'none',
+                  zIndex: 9998,
+                }}
+              />
+
+              {/* Program Edge Fade */}
+              {activeEdgeFade !== null && (
+                <div
+                  className="preview-edge-fade"
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    backgroundColor: activeEdgeFade.color,
+                    opacity: activeEdgeFade.opacity,
+                    pointerEvents: 'none',
+                    zIndex: 9999,
+                  }}
+                />
+              )}
             </div>
           </div>
 
           {showingTimeline && timelineEmpty && (
             <div className="preview-empty-state">
               <div className="empty-icon-group">
-                <span className="empty-icon">🎬</span>
+                <svg
+                  className="empty-icon"
+                  width="34"
+                  height="34"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <rect x="2" y="4" width="20" height="16" rx="2" />
+                  <path d="M2 9h20M7 4v5M12 4v5M17 4v5" />
+                </svg>
               </div>
               <p className="empty-title">Timeline is Empty</p>
               <p className="empty-desc">

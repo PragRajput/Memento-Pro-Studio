@@ -3,13 +3,19 @@ import assert from 'node:assert'
 import {
   cleanTransitions,
   createTransition,
+  edgeFadeAt,
   getEffectiveTransitionDuration,
   locateTransition,
   maxTransitionDuration,
   applyTransitionEasing,
   transitionEasingFor,
+  transitionLayerAlpha,
+  fadesOutgoingClip,
+  transitionVeilAt,
+  wipeDirection,
+  wipeEdge,
 } from '../src/transitionTimeline.ts'
-import type { TimelineItem } from '../src/types.ts'
+import type { TimelineItem, Transition, TransitionType } from '../src/types.ts'
 
 describe('Transition timeline logic', () => {
   const itemA: TimelineItem = { id: 'item-1', clipId: 'clip-1', inPoint: 0, outPoint: 10, muted: false }
@@ -213,5 +219,224 @@ describe('Transition easing', () => {
     const transitions = [{ id: 't', fromItemId: 'a', toItemId: 'b', type: 'ease' as never, duration: 0.8 }]
     const linear = locateTransition(items, [{ ...transitions[0], type: 'crossfade', transitionEasing: 'linear' }], 10)!
     assert.equal(linear.easedProgress, linear.progress)
+  })
+})
+
+describe('Transition layer opacity', () => {
+  const ALL_TYPES: TransitionType[] = [
+    'crossfade',
+    'fade-black',
+    'fade-white',
+    'wipe-left',
+    'wipe-right',
+    'wipe-up',
+    'wipe-down',
+    'slide-left',
+    'slide-right',
+    'zoom-in',
+    'zoom-out',
+    'iris-circle',
+    'blur-dissolve',
+  ]
+
+  it('fully retires the outgoing clip on every type that fades it', () => {
+    // The regression this guards: zoom-in faded the outgoing clip to 0.6 and
+    // stopped, so it stayed visible wherever the incoming clip did not cover
+    // the frame — which is any time the two clips are framed differently.
+    for (const type of ALL_TYPES) {
+      if (!fadesOutgoingClip(type)) continue
+      assert.equal(transitionLayerAlpha(type, 1).a, 0, `${type} must take clip A to zero`)
+    }
+  })
+
+  it('brings the incoming clip to full on every type', () => {
+    for (const type of ALL_TYPES) {
+      assert.equal(transitionLayerAlpha(type, 1).b, 1, `${type} must land clip B at full`)
+    }
+  })
+
+  it('starts with the outgoing clip visible and the incoming one not yet shown', () => {
+    for (const type of ALL_TYPES) {
+      const start = transitionLayerAlpha(type, 0)
+      assert.equal(start.a, 1, `${type} must open on clip A`)
+      if (fadesOutgoingClip(type) || type === 'crossfade') {
+        assert.equal(start.b, 0, `${type} must not show clip B at the start`)
+      }
+    }
+  })
+
+  it('keeps both clips opaque for the types that reveal by geometry', () => {
+    for (const type of ['wipe-left', 'slide-right', 'iris-circle'] as const) {
+      assert.deepEqual(transitionLayerAlpha(type, 0.5), { a: 1, b: 1 }, type)
+    }
+  })
+
+  it('never produces an opacity outside 0..1, at any progress', () => {
+    for (const type of ALL_TYPES) {
+      for (let step = 0; step <= 20; step++) {
+        const { a, b } = transitionLayerAlpha(type, step / 20)
+        assert.ok(a >= 0 && a <= 1, `${type} alpha A out of range: ${a}`)
+        assert.ok(b >= 0 && b <= 1, `${type} alpha B out of range: ${b}`)
+      }
+    }
+  })
+
+  it('clamps progress supplied outside the window', () => {
+    assert.deepEqual(transitionLayerAlpha('zoom-in', -1), transitionLayerAlpha('zoom-in', 0))
+    assert.deepEqual(transitionLayerAlpha('zoom-in', 5), transitionLayerAlpha('zoom-in', 1))
+  })
+})
+
+describe('Edge fades and transition alignment', () => {
+  const itemA: TimelineItem = { id: 'item-1', clipId: 'clip-1', inPoint: 0, outPoint: 10, muted: false }
+  const itemB: TimelineItem = { id: 'item-2', clipId: 'clip-2', inPoint: 0, outPoint: 10, muted: false }
+  const items = [itemA, itemB]
+
+  it('respects transition alignment relative to cut point', () => {
+    // Cut between itemA (0..10) and itemB (10..20) is at T=10s. Duration is 1.0s.
+    const tCenter = { ...createTransition('item-1', 'item-2', 'crossfade', 1.0), transitionAlign: 'center' as const }
+    const tStart = { ...createTransition('item-1', 'item-2', 'crossfade', 1.0), transitionAlign: 'start' as const }
+    const tEnd = { ...createTransition('item-1', 'item-2', 'crossfade', 1.0), transitionAlign: 'end' as const }
+
+    // 'center': window is [9.5, 10.5]
+    assert.strictEqual(locateTransition(items, [tCenter], 9.4), null)
+    assert.strictEqual(locateTransition(items, [tCenter], 9.5)?.progress, 0)
+    assert.strictEqual(locateTransition(items, [tCenter], 10.0)?.progress, 0.5)
+    assert.strictEqual(locateTransition(items, [tCenter], 10.5)?.progress, 1)
+    assert.strictEqual(locateTransition(items, [tCenter], 10.6), null)
+
+    // 'start': window starts at cut [10.0, 11.0]
+    assert.strictEqual(locateTransition(items, [tStart], 9.9), null)
+    assert.strictEqual(locateTransition(items, [tStart], 10.0)?.progress, 0)
+    assert.strictEqual(locateTransition(items, [tStart], 10.5)?.progress, 0.5)
+    assert.strictEqual(locateTransition(items, [tStart], 11.0)?.progress, 1)
+    assert.strictEqual(locateTransition(items, [tStart], 11.1), null)
+
+    // 'end': window ends at cut [9.0, 10.0]
+    assert.strictEqual(locateTransition(items, [tEnd], 8.9), null)
+    assert.strictEqual(locateTransition(items, [tEnd], 9.0)?.progress, 0)
+    assert.strictEqual(locateTransition(items, [tEnd], 9.5)?.progress, 0.5)
+    assert.strictEqual(locateTransition(items, [tEnd], 10.0)?.progress, 1)
+    assert.strictEqual(locateTransition(items, [tEnd], 10.1), null)
+  })
+
+  it('calculates edge fades correctly for in, out, and idle intervals', () => {
+    const edgeFades = {
+      in: { edge: 'in' as const, duration: 2.0, color: '#000000', easing: 'linear' as const },
+      out: { edge: 'out' as const, duration: 1.0, color: '#ffffff', easing: 'linear' as const },
+    }
+    const totalDuration = 10.0
+
+    // Fade in: [0, 2.0]
+    const at0 = edgeFadeAt(edgeFades, 0, totalDuration)
+    assert.ok(at0)
+    assert.strictEqual(at0.color, '#000000')
+    assert.strictEqual(at0.opacity, 1)
+
+    const at1 = edgeFadeAt(edgeFades, 1.0, totalDuration)
+    assert.ok(at1)
+    assert.strictEqual(at1.opacity, 0.5)
+
+    const at2 = edgeFadeAt(edgeFades, 2.0, totalDuration)
+    assert.strictEqual(at2, null)
+
+    // Middle (idle): no fade active
+    assert.strictEqual(edgeFadeAt(edgeFades, 5.0, totalDuration), null)
+
+    // Fade out: [9.0, 10.0]
+    const at9 = edgeFadeAt(edgeFades, 9.0, totalDuration)
+    assert.strictEqual(at9, null) // time > startOut (9.0), so at exactly 9.0 it hasn't started yet
+
+    const at95 = edgeFadeAt(edgeFades, 9.5, totalDuration)
+    assert.ok(at95)
+    assert.strictEqual(at95.color, '#ffffff')
+    assert.strictEqual(at95.opacity, 0.5)
+
+    const at10 = edgeFadeAt(edgeFades, 10.0, totalDuration)
+    assert.ok(at10)
+    assert.strictEqual(at10.opacity, 1)
+
+    // Beyond timeline duration (time > 10.0)
+    const at11 = edgeFadeAt(edgeFades, 11.0, totalDuration)
+    assert.ok(at11) // clamp gives 1
+    assert.strictEqual(at11.opacity, 1)
+  })
+})
+
+describe('Transition veil (dip and flash)', () => {
+  const dip = (over: Partial<Transition> = {}): Transition => ({
+    id: 't', fromItemId: 'a', toItemId: 'b', type: 'fade-black', duration: 1, ...over,
+  })
+
+  it('only the dip and flash types wash the frame', () => {
+    assert.equal(transitionVeilAt(dip(), 0.5)?.color, '#000000')
+    assert.equal(transitionVeilAt(dip({ type: 'fade-white' }), 0.5)?.color, '#ffffff')
+    assert.equal(transitionVeilAt(dip({ type: 'crossfade' }), 0.5), null)
+    assert.equal(transitionVeilAt(dip({ type: 'wipe-left' }), 0.5), null)
+  })
+
+  it('peaks at the midpoint and is clear at both ends', () => {
+    assert.equal(transitionVeilAt(dip(), 0)!.alpha, 0)
+    assert.equal(transitionVeilAt(dip(), 0.5)!.alpha, 1)
+    assert.equal(transitionVeilAt(dip(), 1)!.alpha, 0)
+  })
+
+  it('honours a custom veil colour', () => {
+    // The regression this guards: the exporter read this field and the preview
+    // did not, so a coloured dip looked black on screen and tinted in the file.
+    assert.equal(transitionVeilAt(dip({ transitionVeilColor: '#ff0000' }), 0.5)!.color, '#ff0000')
+    assert.equal(
+      transitionVeilAt(dip({ type: 'fade-white', transitionVeilColor: '#00ff00' }), 0.5)!.color,
+      '#00ff00',
+    )
+  })
+
+  it('scales the wash with strength', () => {
+    assert.equal(transitionVeilAt(dip({ transitionStrength: 0.5 }), 0.5)!.alpha, 0.5)
+    assert.equal(transitionVeilAt(dip({ transitionStrength: 0 }), 0.5)!.alpha, 0)
+  })
+
+  it('never exceeds full opacity', () => {
+    assert.equal(transitionVeilAt(dip({ transitionStrength: 5 }), 0.5)!.alpha, 1)
+  })
+})
+
+describe('Wipe edges', () => {
+  it('identifies the four wipe directions and nothing else', () => {
+    assert.equal(wipeDirection('wipe-left'), 'left')
+    assert.equal(wipeDirection('wipe-right'), 'right')
+    assert.equal(wipeDirection('wipe-up'), 'up')
+    assert.equal(wipeDirection('wipe-down'), 'down')
+    assert.equal(wipeDirection('crossfade'), null)
+    assert.equal(wipeDirection('zoom-in'), null)
+  })
+
+  it('collapses to a hard edge with no softness', () => {
+    const edge = wipeEdge(0.5, 0)
+    assert.equal(edge.solid, 0.5)
+    assert.equal(edge.clear, 0.5)
+  })
+
+  it('spreads the feather either side of the wipe position', () => {
+    // The regression this guards: softness feathered the preview's mask but the
+    // exporter always clipped a hard rectangle.
+    const edge = wipeEdge(0.5, 0.5)
+    assert.ok(edge.solid < 0.5 && edge.clear > 0.5)
+    assert.ok(Math.abs((0.5 - edge.solid) - (edge.clear - 0.5)) < 1e-9, 'feather must be symmetric')
+  })
+
+  it('keeps the edge inside the frame at either extreme', () => {
+    for (const softness of [0, 0.5, 1]) {
+      for (const p of [0, 0.5, 1]) {
+        const edge = wipeEdge(p, softness)
+        assert.ok(edge.solid >= 0 && edge.solid <= 1, `solid ${edge.solid}`)
+        assert.ok(edge.clear >= 0 && edge.clear <= 1, `clear ${edge.clear}`)
+        assert.ok(edge.solid <= edge.clear, 'solid must not pass clear')
+      }
+    }
+  })
+
+  it('advances the edge as the wipe progresses', () => {
+    assert.ok(wipeEdge(0.8, 0.2).solid > wipeEdge(0.2, 0.2).solid)
   })
 })

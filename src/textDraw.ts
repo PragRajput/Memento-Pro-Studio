@@ -1,5 +1,5 @@
 import type { Size } from './export/plan.ts'
-import { blockLeft, blockTop, resolveTextStyle, textIsVisible } from './textStyle.ts'
+import { blockLeft, blockTop, resolveTextStyle, textAnimationAt, textIsVisible } from './textStyle.ts'
 import type { ResolvedTextStyle } from './textStyle.ts'
 import type { TextOverlay } from './types.ts'
 
@@ -20,7 +20,7 @@ export function drawTextOverlays(
 
   for (const item of active) {
     if (!item.text.trim()) continue
-    drawTitle(context, resolveTextStyle(item, size))
+    drawTitle(context, resolveTextStyle(item, size), item, time)
   }
 }
 
@@ -31,9 +31,45 @@ const horizontalAnchor = (style: ResolvedTextStyle, lineWidth: number): number =
   return left + (style.blockWidthPx - lineWidth) / 2
 }
 
-function drawTitle(context: CanvasRenderingContext2D, style: ResolvedTextStyle) {
+function drawTitle(
+  context: CanvasRenderingContext2D,
+  style: ResolvedTextStyle,
+  item: TextOverlay,
+  time: number,
+) {
+  const anim = textAnimationAt(item, time)
+  if (anim.opacity <= 0.001) return
+
+  let charsLeft = anim.visibleChars ?? Number.POSITIVE_INFINITY
+  const linesToDraw = style.lines.map((line) => {
+    if (charsLeft <= 0) return ''
+    if (line.length <= charsLeft) {
+      charsLeft -= line.length
+      return line
+    }
+    const sub = line.slice(0, charsLeft)
+    charsLeft = 0
+    return sub
+  })
+
   context.save()
-  context.globalAlpha = style.opacity
+
+  // Apply rotation and animation transform around block center
+  const cx = style.centreXPx
+  const cy = style.centreYPx
+  context.translate(cx, cy)
+  if (style.rotation !== 0) {
+    context.rotate((style.rotation * Math.PI) / 180)
+  }
+  if (anim.scale !== 1) {
+    context.scale(anim.scale, anim.scale)
+  }
+  if (anim.offsetY !== 0) {
+    context.translate(0, anim.offsetY * style.fontPx)
+  }
+  context.translate(-cx, -cy)
+
+  context.globalAlpha = style.opacity * anim.opacity
   context.font = style.fontCss
   context.textAlign = 'left'
   context.textBaseline = 'alphabetic'
@@ -48,7 +84,7 @@ function drawTitle(context: CanvasRenderingContext2D, style: ResolvedTextStyle) 
 
   if (style.bgColor !== null) {
     context.save()
-    context.globalAlpha = style.opacity * style.bgOpacity
+    context.globalAlpha = style.opacity * anim.opacity * style.bgOpacity
     context.fillStyle = style.bgColor
     context.beginPath()
     context.roundRect(
@@ -62,13 +98,25 @@ function drawTitle(context: CanvasRenderingContext2D, style: ResolvedTextStyle) 
     context.restore()
   }
 
-  style.lines.forEach((line, index) => {
+  linesToDraw.forEach((line, index) => {
     if (line.length === 0) return
     const width = context.measureText(line).width
     const x = horizontalAnchor(style, width)
     // `top` is the cap of the first line, so step by line height and drop to the
     // baseline within each line box.
     const y = top + index * style.lineHeightPx + style.fontPx * 0.8
+
+    // Glow pass (repeated shadow)
+    if (style.glowBlurPx > 0 && style.glowColor) {
+      context.save()
+      context.shadowColor = style.glowColor
+      context.shadowBlur = style.glowBlurPx
+      context.shadowOffsetX = 0
+      context.shadowOffsetY = 0
+      context.fillStyle = style.color
+      context.fillText(line, x, y)
+      context.restore()
+    }
 
     if (style.strokePx > 0) {
       context.save()
@@ -78,7 +126,7 @@ function drawTitle(context: CanvasRenderingContext2D, style: ResolvedTextStyle) 
       context.shadowBlur = style.shadowBlurPx
       context.shadowOffsetX = style.shadowOffsetXPx
       context.shadowOffsetY = style.shadowOffsetYPx
-      context.globalAlpha = style.opacity * style.strokeAlpha
+      context.globalAlpha = style.opacity * anim.opacity * style.strokeAlpha
       context.lineJoin = 'round'
       context.miterLimit = 2
       context.lineWidth = style.strokePx * 2

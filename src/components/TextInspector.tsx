@@ -1,4 +1,6 @@
-import type { TextOverlay } from '../types.ts'
+import type { TextAnimationType, TextOverlay } from '../types.ts'
+import { resetTextOverlay } from '../resetSettings.ts'
+import { TITLE_PRESETS } from '../textStyle.ts'
 
 interface TextInspectorProps {
   item: TextOverlay
@@ -111,6 +113,27 @@ export function TextInspector({ item, onChange, onDelete, onClose }: TextInspect
       </div>
 
       <div className="inspector-body">
+        {/* Title Style Presets */}
+        <div className="inspector-group">
+          <span className="group-label">Title Style Presets</span>
+          <div className="transition-type-grid">
+            {TITLE_PRESETS.map((preset) => {
+              const isActive = item.textPreset === preset.id
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className={`type-card${isActive ? ' active' : ''}`}
+                  onClick={() => onChange({ ...item, ...preset.styles, textPreset: preset.id })}
+                  title={preset.description}
+                >
+                  <span className="type-label">{preset.name}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
         {/* Text Input */}
         <div className="inspector-group">
           <label className="group-label" htmlFor="title-text-input">Text Content</label>
@@ -195,7 +218,7 @@ export function TextInspector({ item, onChange, onDelete, onClose }: TextInspect
         <div className="inspector-group">
           <div className="group-header-row">
             <span className="group-label">Position Presets</span>
-            <span className="drag-hint">💡 Drag on preview canvas</span>
+            <span className="drag-hint">Drag on preview canvas</span>
           </div>
           <div className="segmented-control wrap-control">
             {POSITION_PRESETS.map((p) => {
@@ -258,9 +281,133 @@ export function TextInspector({ item, onChange, onDelete, onClose }: TextInspect
             </div>
           </div>
         </div>
+
+        {/* Animation */}
+        <div className="inspector-group">
+          <span className="group-label">Motion Animation</span>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px' }}>
+            <div>
+              <label style={{ fontSize: '11px', color: 'var(--text-muted)' }} htmlFor="text-anim-in">Entrance</label>
+              <select
+                id="text-anim-in"
+                className="inspector-select"
+                value={item.textAnimIn ?? 'none'}
+                onChange={(e) => onChange({ ...item, textAnimIn: e.target.value as TextAnimationType })}
+              >
+                <option value="none">None</option>
+                <option value="fade">Fade</option>
+                <option value="slide-up">Slide Up</option>
+                <option value="pop">Pop / Scale</option>
+                <option value="typewriter">Typewriter</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', color: 'var(--text-muted)' }} htmlFor="text-anim-out">Exit</label>
+              <select
+                id="text-anim-out"
+                className="inspector-select"
+                value={item.textAnimOut ?? 'none'}
+                onChange={(e) => onChange({ ...item, textAnimOut: e.target.value as TextAnimationType })}
+              >
+                <option value="none">None</option>
+                <option value="fade">Fade</option>
+                <option value="slide-up">Slide Up</option>
+                <option value="pop">Pop / Scale</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Outline & Glow */}
+        <div className="inspector-group">
+          <span className="group-label">Outline & Glow</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="control-sublabel" style={{ width: '60px' }}>Stroke</span>
+              <input
+                type="color"
+                className="native-color-picker"
+                value={item.textStrokeColor ?? '#000000'}
+                onChange={(e) => onChange({ ...item, textStrokeColor: e.target.value })}
+              />
+              <input
+                type="range"
+                className="inspector-slider"
+                min={0}
+                max={0.25}
+                step={0.01}
+                value={item.textStrokeWidth ?? 0}
+                onChange={(e) => onChange({ ...item, textStrokeWidth: parseFloat(e.target.value) })}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="control-sublabel" style={{ width: '60px' }}>Glow</span>
+              <input
+                type="color"
+                className="native-color-picker"
+                value={item.textGlowColor ?? '#38bdf8'}
+                onChange={(e) => onChange({ ...item, textGlowColor: e.target.value })}
+              />
+              <input
+                type="range"
+                className="inspector-slider"
+                min={0}
+                max={0.6}
+                step={0.02}
+                value={item.textGlowBlur ?? 0}
+                onChange={(e) => onChange({ ...item, textGlowBlur: parseFloat(e.target.value) })}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Tracking & Rotation */}
+        <div className="inspector-group">
+          <span className="group-label">Tracking & Tilt</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="control-sublabel" style={{ width: '60px' }}>Tracking</span>
+              <input
+                type="range"
+                className="inspector-slider"
+                min={-0.05}
+                max={0.3}
+                step={0.01}
+                value={item.textLetterSpacing ?? 0}
+                onChange={(e) => onChange({ ...item, textLetterSpacing: parseFloat(e.target.value) })}
+              />
+              <span className="control-subvalue">{Math.round((item.textLetterSpacing ?? 0) * 100)}%</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span className="control-sublabel" style={{ width: '60px' }}>Rotation</span>
+              <input
+                type="range"
+                className="inspector-slider"
+                min={-45}
+                max={45}
+                step={1}
+                value={item.textRotation ?? 0}
+                onChange={(e) => onChange({ ...item, textRotation: parseInt(e.target.value, 10) })}
+              />
+              <span className="control-subvalue">{item.textRotation ?? 0}°</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="inspector-footer">
+        <button
+          type="button"
+          className="inspector-reset-btn"
+          onClick={() => onChange(resetTextOverlay(item))}
+          title="Keep the words, clear every style choice"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="1 4 1 10 7 10" />
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+          </svg>
+          Reset Style
+        </button>
         <button
           type="button"
           className="inspector-delete-btn"

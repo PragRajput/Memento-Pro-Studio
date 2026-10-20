@@ -1,4 +1,5 @@
 import { FILTER_PRESETS } from '../filters.ts'
+import { resetVideoLayerItem } from '../resetSettings.ts'
 import { clearTrack } from '../keyframes.ts'
 import { itemLength } from '../timeline.ts'
 import { videoLayerName } from '../videoLayers.ts'
@@ -162,7 +163,6 @@ export function VideoLayerInspector({
                 onClick={() => onChange({ ...item, filter: preset.id })}
                 title={preset.description}
               >
-                <span className="filter-card-icon">{preset.icon}</span>
                 <span className="filter-card-name">{preset.name}</span>
               </button>
             ))}
@@ -221,11 +221,23 @@ export function VideoLayerInspector({
       <div className="inspector-footer">
         <button
           type="button"
+          className="inspector-reset-btn"
+          onClick={() => onChange(resetVideoLayerItem(item))}
+          title="Clear compositing, filters and animation"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="1 4 1 10 7 10" />
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+          </svg>
+          Reset Layer
+        </button>
+        <button
+          type="button"
           className="btn-danger-outline delete-clip-btn"
           onClick={() => onDelete(item.id)}
           title="Remove this clip from the layer"
         >
-          🗑 Delete Clip
+          Delete Clip
         </button>
       </div>
     </div>

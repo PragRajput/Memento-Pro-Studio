@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AspectRatio, AudioClip, AudioTimelineItem, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from '../types.ts'
+import type { AspectRatio, AudioClip, AudioTimelineItem, EdgeFades, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from '../types.ts'
 import { exportTimeline } from './exportTimeline.ts'
 import type { ExportResult } from './exportTimeline.ts'
 
@@ -22,6 +22,7 @@ export function useExporter(
   aspectRatio: AspectRatio = '16:9',
   overlayItems: readonly OverlayItem[] = [],
   videoLayers: readonly VideoLayerItem[] = [],
+  edgeFades?: EdgeFades,
 ) {
   const [state, setState] = useState<ExportState>({ status: 'idle' })
   const controllerRef = useRef<AbortController | null>(null)
@@ -53,6 +54,7 @@ export function useExporter(
         videoLayers,
         {
           signal: controller.signal,
+          edgeFades,
           onProgress: (stage, fraction) => {
             if (!controller.signal.aborted) setState({ status: 'running', stage, fraction })
           },
@@ -72,7 +74,7 @@ export function useExporter(
     } finally {
       if (controllerRef.current === controller) controllerRef.current = null
     }
-  }, [items, clips, audioItems, audioClips, textItems, transitions, aspectRatio, overlayItems, videoLayers])
+  }, [items, clips, audioItems, audioClips, textItems, transitions, aspectRatio, overlayItems, videoLayers, edgeFades])
 
 
   const cancel = useCallback(() => controllerRef.current?.abort(), [])

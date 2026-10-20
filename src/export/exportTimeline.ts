@@ -15,7 +15,7 @@ import {
 } from 'mediabunny'
 import type { AudioCodec, InputAudioTrack, InputVideoTrack, VideoCodec, VideoSample } from 'mediabunny'
 import { applyAudioEffectNodes } from '../audioEffects.ts'
-import { getCssFilter } from '../filters.ts'
+import { getCssFilter, VIGNETTE, vignetteAlpha } from '../filters.ts'
 import { drawOverlays, overlayFrameFromBitmap, pipSourceTime } from '../overlayDraw.ts'
 import type { OverlayFrame } from '../overlayDraw.ts'
 import { drawTextOverlays } from '../textDraw.ts'
@@ -24,9 +24,10 @@ import { keyframeTimes } from '../keyframes.ts'
 import { clamp, itemLength, locate, timelineDuration, itemStarts } from '../timeline.ts'
 import { applyTransformToContext, blendModeToComposite, evaluateTransform, evaluateVolume } from '../transform.ts'
 import type { EvaluatedTransform } from '../transform.ts'
-import { getEffectiveTransitionDuration, locateTransition, transitionAudioGains } from '../transitionTimeline.ts'
+import { edgeFadeAt, getEffectiveTransitionDuration, locateTransition, transitionAudioGains, transitionLayerAlpha, transitionVeilAt, wipeDirection, wipeEdge } from '../transitionTimeline.ts'
+import type { WipeDirection } from '../transitionTimeline.ts'
 import { activeLayersAt, layerSourceTime, videoLayerEnd, videoLayersDuration } from '../videoLayers.ts'
-import type { AspectRatio, AudioClip, AudioEffectType, AudioTimelineItem, Keyframe, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, TransitionType, VideoLayerItem } from '../types.ts'
+import type { AspectRatio, AudioClip, AudioEffectType, AudioTimelineItem, EdgeFades, Keyframe, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from '../types.ts'
 import { outputSizeForAspectRatio, planFrames } from './plan.ts'
 import type { Size } from './plan.ts'
 
@@ -64,6 +65,8 @@ export interface ExportOptions {
   signal?: AbortSignal
   /** Called with a stage name and overall progress from 0 to 1. */
   onProgress?: (stage: string, fraction: number) => void
+  /** Fades at each end of the whole timeline. */
+  edgeFades?: EdgeFades
 }
 
 interface OpenVideoClip {
@@ -97,7 +100,7 @@ export async function exportTimeline(
   aspectRatio: AspectRatio = '16:9',
   overlayItems: readonly OverlayItem[] = [],
   videoLayers: readonly VideoLayerItem[] = [],
-  { signal, onProgress }: ExportOptions = {},
+  { signal, onProgress, edgeFades }: ExportOptions = {},
 ): Promise<ExportResult> {
   if (items.length === 0) throw new Error('Add clips to the timeline before exporting.')
   const firstClip = clips.get(items[0].clipId)
@@ -303,6 +306,14 @@ export async function exportTimeline(
         await drawVideoLayers(context, size, videoLayers, frameTime, opened, layerIterators)
         await paintOverlays(frameTime)
         drawTextOverlays(context, textItems, frameTime, size)
+        const edgeFadeEmpty = edgeFadeAt(edgeFades, frameTime, totalExportDuration)
+        if (edgeFadeEmpty !== null) {
+          context.save()
+          context.fillStyle = edgeFadeEmpty.color
+          context.globalAlpha = edgeFadeEmpty.opacity
+          context.fillRect(0, 0, size.width, size.height)
+          context.restore()
+        }
         signal?.throwIfAborted()
         await videoSource.add(frameTime, 1 / EXPORT_FPS)
         framesDone += 1
@@ -361,7 +372,7 @@ export async function exportTimeline(
               size,
               visualA,
               visualB,
-              active.transition.type,
+              active.transition,
               active.easedProgress,
               active.itemA,
               active.itemB,
@@ -388,6 +399,14 @@ export async function exportTimeline(
         await drawVideoLayers(context, size, videoLayers, t, opened, layerIterators)
         await paintOverlays(t)
         drawTextOverlays(context, textItems, t, size)
+        const edgeFadeFrame = edgeFadeAt(edgeFades, t, totalExportDuration)
+        if (edgeFadeFrame !== null) {
+          context.save()
+          context.fillStyle = edgeFadeFrame.color
+          context.globalAlpha = edgeFadeFrame.opacity
+          context.fillRect(0, 0, size.width, size.height)
+          context.restore()
+        }
         signal?.throwIfAborted()
         await videoSource.add(t, 1 / EXPORT_FPS)
         framesDone += 1
@@ -837,6 +856,17 @@ function drawVisual(
     drawImageWithFit(context, visual.bitmap, size, fitMode)
   }
 
+  if (item && 'filterVignette' in item && typeof item.filterVignette === 'number' && item.filterVignette > 0) {
+    const cx = size.width / 2
+    const cy = size.height / 2
+    const radius = Math.hypot(cx, cy)
+    const grad = context.createRadialGradient(cx, cy, radius * VIGNETTE.clearStop, cx, cy, radius)
+    grad.addColorStop(0, 'rgba(0, 0, 0, 0)')
+    grad.addColorStop(1, `rgba(0, 0, 0, ${vignetteAlpha(item.filterVignette).toFixed(3)})`)
+    context.fillStyle = grad
+    context.fillRect(0, 0, size.width, size.height)
+  }
+
   context.restore()
 }
 
@@ -1001,12 +1031,85 @@ async function drawVideoLayers(
   }
 }
 
+
+/**
+ * Scratch surface for feathered wipes. A soft edge needs the incoming clip
+ * masked by a gradient, which a canvas clip path cannot express, so the clip is
+ * drawn here first and then alpha-masked.
+ */
+let wipeScratch: HTMLCanvasElement | null = null
+
+function wipeScratchContext(size: Size): CanvasRenderingContext2D | null {
+  if (wipeScratch === null) wipeScratch = document.createElement('canvas')
+  if (wipeScratch.width !== size.width || wipeScratch.height !== size.height) {
+    wipeScratch.width = size.width
+    wipeScratch.height = size.height
+  }
+  const context = wipeScratch.getContext('2d')
+  if (context === null) return null
+  context.setTransform(1, 0, 0, 1, 0, 0)
+  context.globalCompositeOperation = 'source-over'
+  context.globalAlpha = 1
+  context.clearRect(0, 0, size.width, size.height)
+  return context
+}
+
+/** Draw the incoming clip revealed by a wipe, hard-edged or feathered. */
+function drawWipe(
+  context: CanvasRenderingContext2D,
+  size: Size,
+  visual: RenderableVisual | null,
+  item: TimelineItem | null | undefined,
+  transform: EvaluatedTransform | undefined,
+  direction: WipeDirection,
+  progress: number,
+  softness: number,
+) {
+  if (visual === null) return
+  const { solid, clear } = wipeEdge(progress, softness)
+
+  if (softness <= 0 || solid >= clear) {
+    const p = clamp(progress, 0, 1)
+    context.save()
+    context.beginPath()
+    if (direction === 'left') context.rect(0, 0, size.width * p, size.height)
+    else if (direction === 'right') context.rect(size.width * (1 - p), 0, size.width * p, size.height)
+    else if (direction === 'up') context.rect(0, 0, size.width, size.height * p)
+    else context.rect(0, size.height * (1 - p), size.width, size.height * p)
+    context.clip()
+    drawVisual(context, visual, size, item, transform)
+    context.restore()
+    return
+  }
+
+  const scratch = wipeScratchContext(size)
+  if (scratch === null) return
+  drawVisual(scratch, visual, size, item, transform)
+
+  // Keep only what the gradient marks as opaque, feathering the leading edge.
+  scratch.globalCompositeOperation = 'destination-in'
+  const axes: Record<WipeDirection, [number, number, number, number]> = {
+    left: [0, 0, size.width, 0],
+    right: [size.width, 0, 0, 0],
+    up: [0, size.height, 0, 0],
+    down: [0, 0, 0, size.height],
+  }
+  const axis = axes[direction]
+  const gradient = scratch.createLinearGradient(axis[0], axis[1], axis[2], axis[3])
+  gradient.addColorStop(solid, 'rgba(0, 0, 0, 1)')
+  gradient.addColorStop(clear, 'rgba(0, 0, 0, 0)')
+  scratch.fillStyle = gradient
+  scratch.fillRect(0, 0, size.width, size.height)
+
+  if (wipeScratch !== null) context.drawImage(wipeScratch, 0, 0)
+}
+
 function drawTransitionFrame(
   context: CanvasRenderingContext2D,
   size: Size,
   visualA: RenderableVisual | null,
   visualB: RenderableVisual | null,
-  type: TransitionType,
+  transition: Transition,
   progress: number,
   itemA?: TimelineItem | null,
   itemB?: TimelineItem | null,
@@ -1014,6 +1117,8 @@ function drawTransitionFrame(
   transformB?: EvaluatedTransform,
 ) {
   const p = clamp(progress, 0, 1)
+  const type = transition.type
+  const strength = transition.transitionStrength ?? 1
 
   if (type === 'crossfade') {
     if (visualA !== null) {
@@ -1025,86 +1130,39 @@ function drawTransitionFrame(
       drawVisual(context, visualB, size, itemB, transformB)
       context.globalAlpha = 1.0
     }
-  } else if (type === 'fade-black') {
-    if (p < 0.5) {
-      if (visualA !== null) {
-        context.globalAlpha = clamp(1 - p * 2, 0, 1)
-        drawVisual(context, visualA, size, itemA, transformA)
-        context.globalAlpha = 1.0
-      }
-    } else {
-      if (visualB !== null) {
-        context.globalAlpha = clamp((p - 0.5) * 2, 0, 1)
-        drawVisual(context, visualB, size, itemB, transformB)
-        context.globalAlpha = 1.0
-      }
-    }
-  } else if (type === 'fade-white') {
-    if (p < 0.5) {
-      if (visualA !== null) {
-        drawVisual(context, visualA, size, itemA, transformA)
-      }
-      context.fillStyle = '#ffffff'
-      context.globalAlpha = p * 2
-      context.fillRect(0, 0, size.width, size.height)
+  } else if (type === 'fade-black' || type === 'fade-white') {
+    const alpha = transitionLayerAlpha(type, p)
+    if (visualA !== null && alpha.a > 0.001) {
+      context.globalAlpha = clamp(alpha.a, 0, 1)
+      drawVisual(context, visualA, size, itemA, transformA)
       context.globalAlpha = 1.0
-    } else {
-      if (visualB !== null) {
-        drawVisual(context, visualB, size, itemB, transformB)
-      }
-      context.fillStyle = '#ffffff'
-      context.globalAlpha = (1 - p) * 2
+    }
+    if (visualB !== null && alpha.b > 0.001) {
+      context.globalAlpha = clamp(alpha.b, 0, 1)
+      drawVisual(context, visualB, size, itemB, transformB)
+      context.globalAlpha = 1.0
+    }
+    const veil = transitionVeilAt(transition, p)
+    if (veil !== null && veil.alpha > 0.001) {
+      context.fillStyle = veil.color
+      context.globalAlpha = veil.alpha
       context.fillRect(0, 0, size.width, size.height)
       context.globalAlpha = 1.0
     }
-  } else if (type === 'wipe-left') {
+  } else if (wipeDirection(type) !== null) {
     if (visualA !== null) {
       drawVisual(context, visualA, size, itemA, transformA)
     }
-    if (visualB !== null) {
-      context.save()
-      context.beginPath()
-      context.rect(0, 0, size.width * p, size.height)
-      context.clip()
-      drawVisual(context, visualB, size, itemB, transformB)
-      context.restore()
-    }
-  } else if (type === 'wipe-right') {
-    if (visualA !== null) {
-      drawVisual(context, visualA, size, itemA, transformA)
-    }
-    if (visualB !== null) {
-      context.save()
-      context.beginPath()
-      context.rect(size.width * (1 - p), 0, size.width * p, size.height)
-      context.clip()
-      drawVisual(context, visualB, size, itemB, transformB)
-      context.restore()
-    }
-  } else if (type === 'wipe-up') {
-    if (visualA !== null) {
-      drawVisual(context, visualA, size, itemA, transformA)
-    }
-    if (visualB !== null) {
-      context.save()
-      context.beginPath()
-      context.rect(0, 0, size.width, size.height * p)
-      context.clip()
-      drawVisual(context, visualB, size, itemB, transformB)
-      context.restore()
-    }
-  } else if (type === 'wipe-down') {
-    if (visualA !== null) {
-      drawVisual(context, visualA, size, itemA, transformA)
-    }
-    if (visualB !== null) {
-      context.save()
-      context.beginPath()
-      context.rect(0, size.height * (1 - p), size.width, size.height * p)
-      context.clip()
-      drawVisual(context, visualB, size, itemB, transformB)
-      context.restore()
-    }
+    drawWipe(
+      context,
+      size,
+      visualB,
+      itemB,
+      transformB,
+      wipeDirection(type)!,
+      p,
+      transition.transitionSoftness ?? 0,
+    )
   } else if (type === 'slide-left') {
     if (visualA !== null) {
       context.save()
@@ -1136,8 +1194,8 @@ function drawTransitionFrame(
     const cy = size.height / 2
     if (visualA !== null) {
       context.save()
-      context.globalAlpha = clamp(1 - p * 0.4, 0, 1)
-      const scaleA = 1 + p * 0.35
+      context.globalAlpha = clamp(transitionLayerAlpha('zoom-in', p).a, 0, 1)
+      const scaleA = 1 + p * (0.35 * strength)
       context.translate(cx, cy)
       context.scale(scaleA, scaleA)
       context.translate(-cx, -cy)
@@ -1146,8 +1204,8 @@ function drawTransitionFrame(
     }
     if (visualB !== null) {
       context.save()
-      context.globalAlpha = clamp(p, 0, 1)
-      const scaleB = 1 + (1 - p) * 0.15
+      context.globalAlpha = clamp(transitionLayerAlpha('zoom-in', p).b, 0, 1)
+      const scaleB = 1 + (1 - p) * (0.15 * strength)
       context.translate(cx, cy)
       context.scale(scaleB, scaleB)
       context.translate(-cx, -cy)
@@ -1159,8 +1217,8 @@ function drawTransitionFrame(
     const cy = size.height / 2
     if (visualA !== null) {
       context.save()
-      context.globalAlpha = clamp(1 - p, 0, 1)
-      const scaleA = 1 - p * 0.15
+      context.globalAlpha = clamp(transitionLayerAlpha('zoom-out', p).a, 0, 1)
+      const scaleA = 1 - p * (0.15 * strength)
       context.translate(cx, cy)
       context.scale(scaleA, scaleA)
       context.translate(-cx, -cy)
@@ -1169,8 +1227,8 @@ function drawTransitionFrame(
     }
     if (visualB !== null) {
       context.save()
-      context.globalAlpha = clamp(p, 0, 1)
-      const scaleB = 1.35 - p * 0.35
+      context.globalAlpha = clamp(transitionLayerAlpha('zoom-out', p).b, 0, 1)
+      const scaleB = 1 + 0.35 * strength - p * (0.35 * strength)
       context.translate(cx, cy)
       context.scale(scaleB, scaleB)
       context.translate(-cx, -cy)
@@ -1193,7 +1251,7 @@ function drawTransitionFrame(
       context.restore()
     }
   } else if (type === 'blur-dissolve') {
-    const maxBlur = 16
+    const maxBlur = 16 * strength
     if (visualA !== null) {
       context.save()
       context.globalAlpha = clamp(1 - p, 0, 1)

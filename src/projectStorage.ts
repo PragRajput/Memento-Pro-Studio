@@ -1,4 +1,4 @@
-import type { AspectRatio, AudioClip, AudioTimelineItem, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from './types.ts'
+import type { AspectRatio, AudioClip, AudioTimelineItem, EdgeFades, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from './types.ts'
 
 const DB_NAME = 'MiniVideoEditorDB'
 const DB_VERSION = 1
@@ -42,6 +42,7 @@ interface ProjectMeta {
   transitions: Transition[]
   audioTrackCount: number
   aspectRatio?: AspectRatio
+  edgeFades?: EdgeFades
   /** Which stored assets this project uses; the assets themselves are not here. */
   clipIds: string[]
   audioClipIds: string[]
@@ -72,6 +73,7 @@ export interface RestoredProject {
   transitions: Transition[]
   audioTrackCount: number
   aspectRatio: AspectRatio
+  edgeFades?: EdgeFades
 }
 
 function openDB(): Promise<IDBDatabase> {
@@ -197,6 +199,7 @@ export async function persistProjectMeta(
   aspectRatio?: AspectRatio,
   overlayItems: readonly OverlayItem[] = [],
   videoLayers: readonly VideoLayerItem[] = [],
+  edgeFades?: EdgeFades,
 ): Promise<void> {
   if (typeof indexedDB === 'undefined') return
   try {
@@ -212,6 +215,7 @@ export async function persistProjectMeta(
       transitions: [...transitions],
       audioTrackCount,
       aspectRatio,
+      edgeFades,
       clipIds: clips.map((c) => c.id),
       audioClipIds: audioClips.map((c) => c.id),
     }
@@ -336,6 +340,7 @@ export async function restoreProject(): Promise<RestoredProject | null> {
       transitions: meta.transitions ?? [],
       audioTrackCount: meta.audioTrackCount ?? 2,
       aspectRatio: meta.aspectRatio ?? '16:9',
+      edgeFades: meta.edgeFades ?? {},
     }
   } catch (err) {
     console.warn('Failed to restore project from IndexedDB:', err)

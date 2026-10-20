@@ -1,4 +1,5 @@
-import { FILTER_PRESETS } from '../filters.ts'
+import { FILTER_PRESETS, hasManualGrade } from '../filters.ts'
+import { resetTimelineItem } from '../resetSettings.ts'
 import { clearTrack } from '../keyframes.ts'
 import { itemLength } from '../timeline.ts'
 import { KeyframeEditor } from './KeyframeEditor.tsx'
@@ -131,7 +132,6 @@ export function ClipInspector({
                   onClick={() => onChange({ ...item, filter: preset.id })}
                   title={preset.description}
                 >
-                  <span className="filter-card-icon">{preset.icon}</span>
                   <span className="filter-card-name">{preset.name}</span>
                 </button>
               )
@@ -155,6 +155,69 @@ export function ClipInspector({
               />
             </div>
           )}
+        </section>
+
+        {/* Manual Colour Grading */}
+        <section className="inspector-section">
+          <div className="section-header-row">
+            <span className="inspector-section-label">Manual Colour Grading</span>
+            {hasManualGrade(item) && (
+              <button
+                type="button"
+                className="section-reset-link"
+                onClick={() =>
+                  onChange({
+                    ...item,
+                    filterExposure: undefined,
+                    filterContrast: undefined,
+                    filterSaturation: undefined,
+                    filterTemperature: undefined,
+                    filterTint: undefined,
+                    filterHighlights: undefined,
+                    filterShadows: undefined,
+                    filterFade: undefined,
+                    filterVignette: undefined,
+                    filterGrain: undefined,
+                    filterSharpen: undefined,
+                  })
+                }
+              >
+                Reset
+              </button>
+            )}
+          </div>
+
+          <div className="manual-grade-controls">
+            {[
+              { key: 'filterExposure', label: 'Exposure', min: -100, max: 100, step: 1, val: item.filterExposure ?? 0 },
+              { key: 'filterContrast', label: 'Contrast', min: -100, max: 100, step: 1, val: item.filterContrast ?? 0 },
+              { key: 'filterSaturation', label: 'Saturation', min: -100, max: 100, step: 1, val: item.filterSaturation ?? 0 },
+              { key: 'filterTemperature', label: 'Temperature (K)', min: -100, max: 100, step: 1, val: item.filterTemperature ?? 0 },
+              { key: 'filterTint', label: 'Tint (G/M)', min: -100, max: 100, step: 1, val: item.filterTint ?? 0 },
+              { key: 'filterHighlights', label: 'Highlights', min: -100, max: 100, step: 1, val: item.filterHighlights ?? 0 },
+              { key: 'filterShadows', label: 'Shadows', min: -100, max: 100, step: 1, val: item.filterShadows ?? 0 },
+              { key: 'filterFade', label: 'Black Fade', min: 0, max: 100, step: 1, val: item.filterFade ?? 0 },
+              { key: 'filterVignette', label: 'Vignette', min: 0, max: 100, step: 1, val: item.filterVignette ?? 0 },
+              { key: 'filterGrain', label: 'Film Grain', min: 0, max: 100, step: 1, val: item.filterGrain ?? 0 },
+              { key: 'filterSharpen', label: 'Sharpen', min: 0, max: 100, step: 1, val: item.filterSharpen ?? 0 },
+            ].map(({ key, label, min, max, step, val }) => (
+              <div key={key} className="grade-slider-row">
+                <div className="grade-label-line">
+                  <span className="control-sublabel">{label}</span>
+                  <span className="control-subvalue">{val > 0 && min < 0 ? `+${val}` : val}</span>
+                </div>
+                <input
+                  type="range"
+                  min={min}
+                  max={max}
+                  step={step}
+                  value={val}
+                  onChange={(e) => onChange({ ...item, [key]: Number(e.target.value) })}
+                  className="inspector-slider"
+                />
+              </div>
+            ))}
+          </div>
         </section>
 
         {/* Transform: Rotate, Flip, Fit Mode */}
@@ -238,11 +301,23 @@ export function ClipInspector({
       <div className="inspector-footer">
         <button
           type="button"
+          className="inspector-reset-btn"
+          onClick={() => onChange(resetTimelineItem(item))}
+          title="Clear grading, transform, speed and framing"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="1 4 1 10 7 10" />
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+          </svg>
+          Reset Clip
+        </button>
+        <button
+          type="button"
           className="btn-danger-outline delete-clip-btn"
           onClick={() => onDelete(item.id)}
           title="Delete this clip from timeline"
         >
-          🗑 Delete Clip
+          Delete Clip
         </button>
       </div>
     </div>

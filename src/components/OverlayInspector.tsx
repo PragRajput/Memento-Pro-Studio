@@ -2,11 +2,16 @@ import {
   LOWER_THIRD_PRESETS,
   VFX_OVERLAY_PRESETS,
 } from '../overlayDraw.ts'
+import { resetOverlayItem } from '../resetSettings.ts'
 import type {
   BlendMode,
   MediaClip,
+  OverlayAnimation,
   OverlayCategory,
   OverlayItem,
+  OverlayLetterboxRatio,
+  OverlayPipShape,
+  OverlayWashShape,
 } from '../types.ts'
 
 interface OverlayInspectorProps {
@@ -26,6 +31,31 @@ const BLEND_MODES: { id: BlendMode; label: string }[] = [
 ]
 
 const ACCENT_COLORS = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#ffffff']
+
+const ANIMATION_KINDS: { id: OverlayAnimation; label: string }[] = [
+  { id: 'none', label: 'Cut (None)' },
+  { id: 'fade', label: 'Dissolve (Fade)' },
+  { id: 'slide-left', label: 'Slide Left' },
+  { id: 'slide-up', label: 'Slide Up' },
+  { id: 'scale-pop', label: 'Pop (Scale)' },
+  { id: 'wipe-right', label: 'Wipe' },
+]
+
+const LETTERBOX_RATIOS: { id: OverlayLetterboxRatio; label: string }[] = [
+  { id: '2.39', label: '2.39:1 (Anamorphic Scope)' },
+  { id: '2.35', label: '2.35:1 (Widescreen Classic)' },
+  { id: '2.00', label: '2.00:1 (Univisium / Modern Streaming)' },
+  { id: '1.85', label: '1.85:1 (Flat Academy)' },
+  { id: '4:3', label: '4:3 (Vintage Television)' },
+]
+
+const WASH_SHAPES: { id: OverlayWashShape; label: string }[] = [
+  { id: 'flat', label: 'Solid Flat Wash' },
+  { id: 'linear', label: 'Linear Gradient' },
+  { id: 'radial', label: 'Radial Spotlight' },
+  { id: 'scrim-bottom', label: 'Bottom Scrim' },
+  { id: 'scrim-top', label: 'Top Scrim' },
+]
 
 export function OverlayInspector({
   item,
@@ -60,12 +90,12 @@ export function OverlayInspector({
         <div className="inspector-title-group">
           <span className="inspector-icon overlay-icon-badge" aria-hidden="true">
             {currentCategory === 'media'
-              ? '🖼️'
+              ? 'PIP'
               : currentCategory === 'vfx'
-                ? '✨'
+                ? 'FX'
                 : currentCategory === 'lower-third'
-                  ? '📺'
-                  : '🎨'}
+                  ? 'L3'
+                  : 'COL'}
           </span>
           <div className="header-text-block">
             <h3>Overlay Properties</h3>
@@ -101,28 +131,28 @@ export function OverlayInspector({
               className={currentCategory === 'media' ? 'active' : ''}
               onClick={() => handleCategoryChange('media')}
             >
-              🖼️ Media / PiP
+              Media / PiP
             </button>
             <button
               type="button"
               className={currentCategory === 'vfx' ? 'active' : ''}
               onClick={() => handleCategoryChange('vfx')}
             >
-              ✨ Visual FX
+              Visual FX
             </button>
             <button
               type="button"
               className={currentCategory === 'lower-third' ? 'active' : ''}
               onClick={() => handleCategoryChange('lower-third')}
             >
-              📺 Lower Third
+              Lower Third
             </button>
             <button
               type="button"
               className={currentCategory === 'color' ? 'active' : ''}
               onClick={() => handleCategoryChange('color')}
             >
-              🎨 Color Tint
+              Color Tint
             </button>
           </div>
         </div>
@@ -245,19 +275,63 @@ export function OverlayInspector({
             </div>
 
             <div className="inspector-group">
-              <div className="group-header-row">
-                <span className="group-label">Rounded Corners</span>
-                <span className="group-value-badge">{item.borderRadius ?? 0}px</span>
+              <span className="group-label">Mask Shape</span>
+              <div className="segmented-control">
+                {(['rect', 'rounded', 'circle'] as const).map((shape: OverlayPipShape) => (
+                  <button
+                    key={shape}
+                    type="button"
+                    className={(item.pipShape ?? 'rounded') === shape ? 'active' : ''}
+                    onClick={() => onChange({ ...item, pipShape: shape })}
+                  >
+                    {shape === 'rect' ? 'Square' : shape === 'rounded' ? 'Rounded' : 'Circle'}
+                  </button>
+                ))}
               </div>
-              <input
-                type="range"
-                className="inspector-slider"
-                min={0}
-                max={32}
-                step={2}
-                value={item.borderRadius ?? 0}
-                onChange={(e) => onChange({ ...item, borderRadius: Number(e.target.value) })}
-              />
+            </div>
+
+            {(item.pipShape ?? 'rounded') === 'rounded' && (
+              <div className="inspector-group">
+                <div className="group-header-row">
+                  <span className="group-label">Rounded Corners</span>
+                  <span className="group-value-badge">{item.borderRadius ?? 8}px</span>
+                </div>
+                <input
+                  type="range"
+                  className="inspector-slider"
+                  min={0}
+                  max={32}
+                  step={2}
+                  value={item.borderRadius ?? 8}
+                  onChange={(e) => onChange({ ...item, borderRadius: Number(e.target.value) })}
+                />
+              </div>
+            )}
+
+            <div className="inspector-group">
+              <div className="group-header-row">
+                <span className="group-label">Rotation & Mirror</span>
+                <span className="group-value-badge">{item.pipRotation ?? 0}°</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <input
+                  type="range"
+                  className="inspector-slider"
+                  min={-180}
+                  max={180}
+                  step={5}
+                  value={item.pipRotation ?? 0}
+                  onChange={(e) => onChange({ ...item, pipRotation: parseInt(e.target.value, 10) })}
+                />
+                <button
+                  type="button"
+                  className={`preset-pos-btn${item.pipFlipH ? ' active' : ''}`}
+                  style={{ whiteSpace: 'nowrap', padding: '4px 8px', fontSize: '11px' }}
+                  onClick={() => onChange({ ...item, pipFlipH: !item.pipFlipH })}
+                >
+                  ⇄ Mirror
+                </button>
+              </div>
             </div>
 
             <div className="inspector-group">
@@ -284,6 +358,62 @@ export function OverlayInspector({
                 />
               </div>
             </div>
+
+            <div className="inspector-group">
+              <div className="group-header-row">
+                <span className="group-label">Drop Shadow</span>
+                <button
+                  type="button"
+                  className="section-reset-link"
+                  onClick={() => onChange({ ...item, pipShadow: !item.pipShadow })}
+                >
+                  {item.pipShadow ? 'Disable' : 'Enable'}
+                </button>
+              </div>
+              {item.pipShadow && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="control-sublabel" style={{ width: '48px' }}>Blur</span>
+                    <input
+                      type="range"
+                      className="inspector-slider"
+                      min={0}
+                      max={40}
+                      step={2}
+                      value={item.pipShadowBlur ?? 16}
+                      onChange={(e) => onChange({ ...item, pipShadowBlur: parseInt(e.target.value, 10) })}
+                    />
+                    <span className="control-subvalue">{item.pipShadowBlur ?? 16}px</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="control-sublabel" style={{ width: '48px' }}>Offset Y</span>
+                    <input
+                      type="range"
+                      className="inspector-slider"
+                      min={0}
+                      max={30}
+                      step={1}
+                      value={item.pipShadowY ?? 8}
+                      onChange={(e) => onChange({ ...item, pipShadowY: parseInt(e.target.value, 10) })}
+                    />
+                    <span className="control-subvalue">{item.pipShadowY ?? 8}px</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="control-sublabel" style={{ width: '48px' }}>Opacity</span>
+                    <input
+                      type="range"
+                      className="inspector-slider"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={item.pipShadowOpacity ?? 0.55}
+                      onChange={(e) => onChange({ ...item, pipShadowOpacity: parseFloat(e.target.value) })}
+                    />
+                    <span className="control-subvalue">{Math.round((item.pipShadowOpacity ?? 0.55) * 100)}%</span>
+                  </div>
+                </div>
+              )}
+            </div>
           </>
         )}
 
@@ -308,7 +438,6 @@ export function OverlayInspector({
                       onClick={() => onChange({ ...item, vfxType: p.id })}
                       title={p.description}
                     >
-                      <span className="overlay-card-icon">{p.icon}</span>
                       <span className="overlay-card-name">{p.name}</span>
                     </button>
                   )
@@ -331,6 +460,69 @@ export function OverlayInspector({
                 onChange={(e) => onChange({ ...item, intensity: parseFloat(e.target.value) })}
               />
             </div>
+
+            {item.vfxType === 'letterbox' && (
+              <div className="inspector-group">
+                <label className="group-label" htmlFor="vfx-letterbox-ratio">Letterbox Target Ratio</label>
+                <select
+                  id="vfx-letterbox-ratio"
+                  className="inspector-select"
+                  value={item.vfxLetterboxRatio ?? '2.35'}
+                  onChange={(e) => onChange({ ...item, vfxLetterboxRatio: e.target.value as OverlayLetterboxRatio })}
+                >
+                  {LETTERBOX_RATIOS.map((r) => (
+                    <option key={r.id} value={r.id}>{r.label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {item.vfxType === 'vignette' && (
+              <>
+                <div className="inspector-group">
+                  <div className="group-header-row">
+                    <span className="group-label">Vignette Feather (Clear Radius)</span>
+                    <span className="group-value-badge">{Math.round((item.vfxVignetteFeather ?? 0.45) * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    className="inspector-slider"
+                    min={0.1}
+                    max={0.9}
+                    step={0.05}
+                    value={item.vfxVignetteFeather ?? 0.45}
+                    onChange={(e) => onChange({ ...item, vfxVignetteFeather: parseFloat(e.target.value) })}
+                  />
+                </div>
+                <div className="inspector-group">
+                  <span className="group-label">Vignette Color</span>
+                  <input
+                    type="color"
+                    className="native-color-picker"
+                    value={item.vfxVignetteColor ?? '#000000'}
+                    onChange={(e) => onChange({ ...item, vfxVignetteColor: e.target.value })}
+                  />
+                </div>
+              </>
+            )}
+
+            {item.vfxType === 'bokeh' && (
+              <div className="inspector-group">
+                <div className="group-header-row">
+                  <span className="group-label">Bokeh Discs Count</span>
+                  <span className="group-value-badge">{item.vfxBokehCount ?? 14}</span>
+                </div>
+                <input
+                  type="range"
+                  className="inspector-slider"
+                  min={4}
+                  max={48}
+                  step={2}
+                  value={item.vfxBokehCount ?? 14}
+                  onChange={(e) => onChange({ ...item, vfxBokehCount: parseInt(e.target.value, 10) })}
+                />
+              </div>
+            )}
           </>
         )}
 
@@ -352,7 +544,6 @@ export function OverlayInspector({
                       onClick={() => onChange({ ...item, lowerThirdStyle: p.id })}
                       title={p.description}
                     >
-                      <span className="overlay-card-icon">{p.icon}</span>
                       <span className="overlay-card-name">{p.name}</span>
                     </button>
                   )
@@ -408,12 +599,60 @@ export function OverlayInspector({
                 </div>
               </div>
             </div>
+
+            <div className="inspector-group">
+              <div className="group-header-row">
+                <span className="group-label">Scale Multiplier</span>
+                <span className="group-value-badge">{(item.lowerThirdScale ?? 1).toFixed(1)}x</span>
+              </div>
+              <input
+                type="range"
+                className="inspector-slider"
+                min={0.6}
+                max={1.8}
+                step={0.1}
+                value={item.lowerThirdScale ?? 1}
+                onChange={(e) => onChange({ ...item, lowerThirdScale: parseFloat(e.target.value) })}
+              />
+            </div>
           </>
         )}
 
-        {/* --- 4. COLOR TINT CONTROLS --- */}
+        {/* --- 4. COLOR TINT / WASH CONTROLS --- */}
         {currentCategory === 'color' && (
           <>
+            <div className="inspector-group">
+              <label className="group-label" htmlFor="color-wash-shape">Wash Distribution</label>
+              <select
+                id="color-wash-shape"
+                className="inspector-select"
+                value={item.colorWashShape ?? (item.colorSecondary ? 'linear' : 'flat')}
+                onChange={(e) => onChange({ ...item, colorWashShape: e.target.value as OverlayWashShape })}
+              >
+                {WASH_SHAPES.map((s) => (
+                  <option key={s.id} value={s.id}>{s.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {((item.colorWashShape ?? '').startsWith('scrim')) && (
+              <div className="inspector-group">
+                <div className="group-header-row">
+                  <span className="group-label">Scrim Height Fraction</span>
+                  <span className="group-value-badge">{Math.round((item.colorWashScrimSize ?? 0.5) * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  className="inspector-slider"
+                  min={0.1}
+                  max={1.0}
+                  step={0.05}
+                  value={item.colorWashScrimSize ?? 0.5}
+                  onChange={(e) => onChange({ ...item, colorWashScrimSize: parseFloat(e.target.value) })}
+                />
+              </div>
+            )}
+
             <div className="inspector-group">
               <span className="group-label">Primary Color</span>
               <div className="color-control-row">
@@ -438,25 +677,27 @@ export function OverlayInspector({
               </div>
             </div>
 
-            <div className="inspector-group">
-              <span className="group-label">Secondary Color (Gradient)</span>
-              <div className="color-control-row">
-                <input
-                  type="color"
-                  className="native-color-picker"
-                  value={item.colorSecondary ?? '#a855f7'}
-                  onChange={(e) => onChange({ ...item, colorSecondary: e.target.value })}
-                />
-                <button
-                  type="button"
-                  className="preset-pos-btn"
-                  style={{ fontSize: '11px', padding: '4px 8px' }}
-                  onClick={() => onChange({ ...item, colorSecondary: item.colorSecondary ? undefined : '#a855f7' })}
-                >
-                  {item.colorSecondary ? 'Remove Gradient' : '+ Add Gradient'}
-                </button>
+            {(item.colorWashShape === 'linear' || item.colorWashShape === 'radial' || item.colorSecondary) && (
+              <div className="inspector-group">
+                <span className="group-label">Secondary Color (Gradient)</span>
+                <div className="color-control-row">
+                  <input
+                    type="color"
+                    className="native-color-picker"
+                    value={item.colorSecondary ?? '#a855f7'}
+                    onChange={(e) => onChange({ ...item, colorSecondary: e.target.value })}
+                  />
+                  <button
+                    type="button"
+                    className="preset-pos-btn"
+                    style={{ fontSize: '11px', padding: '4px 8px' }}
+                    onClick={() => onChange({ ...item, colorSecondary: item.colorSecondary ? undefined : '#a855f7' })}
+                  >
+                    {item.colorSecondary ? 'Clear Second Color' : '+ Add Gradient'}
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </>
         )}
 
@@ -486,38 +727,64 @@ export function OverlayInspector({
             value={item.blendMode ?? 'normal'}
             onChange={(e) => onChange({ ...item, blendMode: e.target.value as BlendMode })}
           >
-            {BLEND_MODES.map((mode) => (
-              <option key={mode.id} value={mode.id}>
-                {mode.label}
-              </option>
+            {BLEND_MODES.map((bm) => (
+              <option key={bm.id} value={bm.id}>{bm.label}</option>
             ))}
           </select>
         </div>
 
-        {/* --- DURATION SECTION --- */}
+        {/* --- ENTRANCE / EXIT MOTION ANIMATION --- */}
         <div className="inspector-group">
-          <div className="group-header-row">
-            <span className="group-label">Duration</span>
-            <span className="group-value-badge">{item.duration.toFixed(1)}s</span>
+          <span className="group-label">Motion Animation</span>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            <div>
+              <label style={{ fontSize: '11px', color: 'var(--text-muted)' }} htmlFor="overlay-anim-in">Entrance</label>
+              <select
+                id="overlay-anim-in"
+                className="inspector-select"
+                value={item.overlayAnimIn ?? 'none'}
+                onChange={(e) => onChange({ ...item, overlayAnimIn: e.target.value as OverlayAnimation })}
+              >
+                {ANIMATION_KINDS.map((ak) => (
+                  <option key={ak.id} value={ak.id}>{ak.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', color: 'var(--text-muted)' }} htmlFor="overlay-anim-out">Exit</label>
+              <select
+                id="overlay-anim-out"
+                className="inspector-select"
+                value={item.overlayAnimOut ?? 'none'}
+                onChange={(e) => onChange({ ...item, overlayAnimOut: e.target.value as OverlayAnimation })}
+              >
+                {ANIMATION_KINDS.map((ak) => (
+                  <option key={ak.id} value={ak.id}>{ak.label}</option>
+                ))}
+              </select>
+            </div>
           </div>
-          <input
-            type="range"
-            className="inspector-slider"
-            min={0.5}
-            max={20}
-            step={0.5}
-            value={item.duration}
-            onChange={(e) => onChange({ ...item, duration: parseFloat(e.target.value) })}
-          />
         </div>
       </div>
 
       <div className="inspector-footer">
         <button
           type="button"
+          className="inspector-reset-btn"
+          onClick={() => onChange(resetOverlayItem(item))}
+          title="Back to this overlay type’s defaults"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="1 4 1 10 7 10" />
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+          </svg>
+          Reset Overlay
+        </button>
+        <button
+          type="button"
           className="inspector-delete-btn"
           onClick={() => onDelete(item.id)}
-          title="Delete overlay"
+          title="Delete this overlay"
         >
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="3 6 5 6 21 6" />

@@ -1,5 +1,23 @@
 import { clamp, itemLength, itemStarts } from './timeline.ts'
-import type { TimelineItem, Transition, TransitionEasing, TransitionType } from './types.ts'
+import type { EdgeFades, TimelineItem, Transition, TransitionEasing, TransitionType } from './types.ts'
+
+
+/** Every transition type with its display name, shared by the inspector and the library panel. */
+export const TRANSITION_TYPES: readonly { type: TransitionType; label: string; description: string }[] = [
+  { type: 'crossfade', label: 'Crossfade', description: 'Dissolve one clip into the next' },
+  { type: 'fade-black', label: 'Dip to Black', description: 'Fade down to black, then up' },
+  { type: 'fade-white', label: 'Flash White', description: 'Bloom through white' },
+  { type: 'blur-dissolve', label: 'Blur Dissolve', description: 'Defocus across the cut' },
+  { type: 'wipe-left', label: 'Wipe Left', description: 'Reveal from the right edge' },
+  { type: 'wipe-right', label: 'Wipe Right', description: 'Reveal from the left edge' },
+  { type: 'wipe-up', label: 'Wipe Up', description: 'Reveal from the bottom' },
+  { type: 'wipe-down', label: 'Wipe Down', description: 'Reveal from the top' },
+  { type: 'slide-left', label: 'Push Left', description: 'Push the old clip off to the left' },
+  { type: 'slide-right', label: 'Push Right', description: 'Push the old clip off to the right' },
+  { type: 'zoom-in', label: 'Zoom In', description: 'Punch in as the next clip arrives' },
+  { type: 'zoom-out', label: 'Zoom Out', description: 'Pull back into the next clip' },
+  { type: 'iris-circle', label: 'Circle Iris', description: 'Open a circle on the next clip' },
+]
 
 /** Default transition duration in seconds. */
 export const DEFAULT_TRANSITION_DURATION = 0.8
@@ -52,6 +70,139 @@ export function applyTransitionEasing(easing: TransitionEasing | undefined, t: n
 /** The curve a transition runs on: its own, or the default for its type. */
 export function transitionEasingFor(transition: Transition): TransitionEasing {
   return transition.transitionEasing ?? DEFAULT_EASING[transition.type] ?? 'linear'
+}
+
+export interface ActiveEdgeFade {
+  edge: 'in' | 'out'
+  color: string
+  opacity: number
+}
+
+/** Fade state at `time` for timeline start/end fades. */
+export function edgeFadeAt(
+  edgeFades: EdgeFades | undefined,
+  time: number,
+  totalDuration: number,
+): ActiveEdgeFade | null {
+  if (!edgeFades || totalDuration <= 0) return null
+
+  // In-fade
+  if (edgeFades.in && edgeFades.in.duration > 0 && time < edgeFades.in.duration) {
+    const rawProgress = clamp(time / edgeFades.in.duration, 0, 1)
+    const eased = applyTransitionEasing(edgeFades.in.easing, rawProgress)
+    const opacity = clamp(1 - eased, 0, 1)
+    if (opacity > 0.001) {
+      return { edge: 'in', color: edgeFades.in.color || '#000000', opacity }
+    }
+  }
+
+  // Out-fade
+  if (edgeFades.out && edgeFades.out.duration > 0) {
+    const startOut = totalDuration - edgeFades.out.duration
+    if (time > startOut) {
+      const rawProgress = clamp((time - startOut) / edgeFades.out.duration, 0, 1)
+      const eased = applyTransitionEasing(edgeFades.out.easing, rawProgress)
+      const opacity = clamp(eased, 0, 1)
+      if (opacity > 0.001) {
+        return { edge: 'out', color: edgeFades.out.color || '#000000', opacity }
+      }
+    }
+  }
+
+  return null
+}
+
+/**
+ * Opacity of each clip's picture at `progress` through a transition.
+ *
+ * Types that reveal by geometry — wipes, slides, the iris — leave both clips
+ * fully opaque and let the incoming clip's clip-path cover the outgoing one.
+ * Types that reveal by fading must take the outgoing clip all the way to zero:
+ * leaving it part-visible only looks right while the incoming clip happens to
+ * fill the frame, and breaks the moment the two clips are framed differently.
+ */
+export function transitionLayerAlpha(
+  type: TransitionType,
+  progress: number,
+): { a: number; b: number } {
+  const p = clamp(progress, 0, 1)
+  switch (type) {
+    case 'zoom-in':
+    case 'zoom-out':
+    case 'blur-dissolve':
+      return { a: 1 - p, b: p }
+    case 'fade-black':
+      return p < 0.5 ? { a: 1 - p * 2, b: 0 } : { a: 0, b: (p - 0.5) * 2 }
+    case 'fade-white':
+      return p < 0.5 ? { a: 1, b: 0 } : { a: 0, b: 1 }
+    case 'crossfade':
+      // The outgoing clip is held at full and the incoming one fades over it,
+      // which avoids the dip a symmetric dissolve shows against black.
+      return { a: 1, b: p }
+    default:
+      return { a: 1, b: 1 }
+  }
+}
+
+/**
+ * The full-frame wash a dip or flash paints, and how opaque it is at `progress`.
+ * Null for types that do not use one.
+ *
+ * Both renderers read this. The export used to paint a veil only for the white
+ * flash while the preview faked it with a brightness boost, so a custom veil
+ * colour showed in the file but never on screen.
+ */
+export function transitionVeilAt(
+  transition: Transition,
+  progress: number,
+): { color: string; alpha: number } | null {
+  if (transition.type !== 'fade-black' && transition.type !== 'fade-white') return null
+  const p = clamp(progress, 0, 1)
+  const strength = transition.transitionStrength ?? 1
+  const color =
+    transition.transitionVeilColor || (transition.type === 'fade-white' ? '#ffffff' : '#000000')
+  // Peaks at the midpoint, which is where the cut itself sits.
+  return { color, alpha: clamp((1 - Math.abs(p * 2 - 1)) * strength, 0, 1) }
+}
+
+/** The four wipe directions, and whether a type is one of them. */
+export type WipeDirection = 'left' | 'right' | 'up' | 'down'
+
+export function wipeDirection(type: TransitionType): WipeDirection | null {
+  switch (type) {
+    case 'wipe-left':
+      return 'left'
+    case 'wipe-right':
+      return 'right'
+    case 'wipe-up':
+      return 'up'
+    case 'wipe-down':
+      return 'down'
+    default:
+      return null
+  }
+}
+
+/**
+ * Where a wipe's feathered edge begins and ends, as fractions of the frame
+ * along the wipe axis. `softness` is 0..1; the edge spans twice that times 20%
+ * of the frame, centred on the wipe position, matching the preview's mask.
+ */
+export function wipeEdge(progress: number, softness: number): { solid: number; clear: number } {
+  const p = clamp(progress, 0, 1)
+  const feather = clamp(softness, 0, 1) * 0.2
+  return { solid: clamp(p - feather, 0, 1), clear: clamp(p + feather, 0, 1) }
+}
+
+/** Types that retire the outgoing clip by fading it rather than covering it. */
+export function fadesOutgoingClip(type: TransitionType): boolean {
+  return (
+    type === 'zoom-in' ||
+    type === 'zoom-out' ||
+    type === 'blur-dissolve' ||
+    type === 'fade-black' ||
+    type === 'fade-white'
+  )
 }
 
 /**
@@ -164,9 +315,9 @@ export function locateTransition(
 
     const cutTime = starts[i + 1]
     const d = getEffectiveTransitionDuration(transition, itemA, itemB)
-    const half = d / 2
-    const windowStart = cutTime - half
-    const windowEnd = cutTime + half
+    const align = transition.transitionAlign ?? 'center'
+    const windowStart = align === 'start' ? cutTime : align === 'end' ? cutTime - d : cutTime - d / 2
+    const windowEnd = align === 'start' ? cutTime + d : align === 'end' ? cutTime : cutTime + d / 2
 
     if (time >= windowStart && time <= windowEnd) {
       const progress = clamp((time - windowStart) / d, 0, 1)

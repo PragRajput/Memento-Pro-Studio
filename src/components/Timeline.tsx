@@ -4,7 +4,7 @@ import { AudioLane } from './AudioLane.tsx'
 import { OverlayLane } from './OverlayLane.tsx'
 import { VideoLayerLane } from './VideoLayerLane.tsx'
 import { TextLane } from './TextLane.tsx'
-import { AUDIO_DRAG_TYPE, CLIP_DRAG_TYPE } from '../dnd.ts'
+import { AUDIO_DRAG_TYPE, CLIP_DRAG_TYPE, FILTER_DRAG_TYPE } from '../dnd.ts'
 import { formatDuration, formatTimecode } from '../format.ts'
 import {
   clamp,
@@ -21,13 +21,17 @@ import {
 import type {
   AudioClip,
   AudioTimelineItem,
+  EdgeFades,
   MediaClip,
   OverlayItem,
   TextOverlay,
   TimelineItem,
   Transition,
+  TransitionEasing,
   TransitionType,
   VideoLayerItem,
+  FilterType,
+  AudioEffectType,
 } from '../types.ts'
 
 /** Ruler label spacing candidates, in seconds; the first that leaves room for a label wins. */
@@ -78,6 +82,8 @@ interface TimelineProps {
   onAddText: () => void
   onMoveTextItem: (id: string, start: number) => void
   onTrimTextItem: (id: string, edge: 'in' | 'out', time: number) => void
+  onApplyFilterToItem?: (itemId: string, filter: FilterType) => void
+  onApplyAudioEffectToItem?: (itemId: string, effect: AudioEffectType) => void
   videoLayers?: VideoLayerItem[]
   videoLayerCount?: number
   selectedLayerItemId?: string | null
@@ -94,6 +100,8 @@ interface TimelineProps {
   onMoveOverlayItem?: (id: string, start: number) => void
   onTrimOverlayItem?: (id: string, edge: 'in' | 'out', time: number) => void
   onAddMediaOverlay?: (clipId: string, start: number) => void
+  edgeFades?: EdgeFades
+  onUpdateEdgeFades?: (updated: EdgeFades) => void
 }
 
 interface Reorder {
@@ -142,6 +150,8 @@ export function Timeline({
   onAddText,
   onMoveTextItem,
   onTrimTextItem,
+  onApplyFilterToItem,
+  onApplyAudioEffectToItem,
   videoLayers = [],
   videoLayerCount = 1,
   selectedLayerItemId = null,
@@ -158,14 +168,18 @@ export function Timeline({
   onMoveOverlayItem,
   onTrimOverlayItem,
   onAddMediaOverlay,
+  edgeFades,
+  onUpdateEdgeFades,
 }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const viewportWidth = useElementWidth(scrollRef)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [reorder, setReorder] = useState<Reorder | null>(null)
+  const [filterDropId, setFilterDropId] = useState<string | null>(null)
   const [isAddTrackDragOver, setIsAddTrackDragOver] = useState(false)
   const [showOverlayMenu, setShowOverlayMenu] = useState(false)
+  const [showEdgeFadesMenu, setShowEdgeFadesMenu] = useState(false)
 
   const maxTrackInItems = audioItems.reduce((max, item) => Math.max(max, item.trackIndex ?? 0), 0)
   const trackCount = Math.max(audioTrackCount, maxTrackInItems + 1, 1)
@@ -433,7 +447,7 @@ export function Timeline({
                     onAddOverlay?.('media')
                   }}
                 >
-                  <span className="overlay-menu-icon">🖼️</span>
+                  <span className="overlay-menu-icon">PIP</span>
                   <div className="overlay-menu-text">
                     <strong>Picture-in-Picture</strong>
                     <small>Logo, watermark, or video</small>
@@ -446,7 +460,7 @@ export function Timeline({
                     onAddOverlay?.('vfx')
                   }}
                 >
-                  <span className="overlay-menu-icon">🎬</span>
+                  <span className="overlay-menu-icon">FX</span>
                   <div className="overlay-menu-text">
                     <strong>Cinematic Atmosphere FX</strong>
                     <small>Letterbox, vignette, grain, light leak</small>
@@ -459,7 +473,7 @@ export function Timeline({
                     onAddOverlay?.('lower-third')
                   }}
                 >
-                  <span className="overlay-menu-icon">📺</span>
+                  <span className="overlay-menu-icon">L3</span>
                   <div className="overlay-menu-text">
                     <strong>Broadcast Lower Third</strong>
                     <small>Speaker name, title, breaking ribbon</small>
@@ -472,12 +486,198 @@ export function Timeline({
                     onAddOverlay?.('color')
                   }}
                 >
-                  <span className="overlay-menu-icon">🎨</span>
+                  <span className="overlay-menu-icon">COL</span>
                   <div className="overlay-menu-text">
                     <strong>Color Gradient Wash</strong>
                     <small>Warm sunset, neon blend tint</small>
                   </div>
                 </button>
+              </div>
+            )}
+          </div>
+
+          {/* Edge Fades Tool & Popover */}
+          <div className="overlay-dropdown-wrap">
+            <button
+              type="button"
+              className={`tool-btn edge-fades-btn${(edgeFades?.in?.duration || edgeFades?.out?.duration) ? ' active' : ''}`}
+              onClick={() => setShowEdgeFadesMenu((prev) => !prev)}
+              disabled={duration <= 0}
+              title="Configure Fade-in-from-black and Fade-out-to-black at timeline edges"
+            >
+              <span className="tool-icon">◐</span>
+              <span>Edge Fades</span>
+            </button>
+            {showEdgeFadesMenu && (
+              <div className="overlay-menu-dropdown edge-fades-dropdown" style={{ width: '280px', padding: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <strong style={{ fontSize: '13px' }}>Timeline Edge Fades</strong>
+                  <button
+                    type="button"
+                    style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}
+                    onClick={() => setShowEdgeFadesMenu(false)}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {/* Fade In */}
+                <div style={{ marginBottom: '12px', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 600 }}>Fade In (Start)</span>
+                    <label style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(edgeFades?.in && edgeFades.in.duration > 0)}
+                        onChange={(e) => {
+                          const active = e.target.checked
+                          onUpdateEdgeFades?.({
+                            ...edgeFades,
+                            in: active
+                              ? { edge: 'in', duration: 1.0, color: '#000000', easing: 'ease-in-out' }
+                              : undefined,
+                          })
+                        }}
+                      />
+                      Enable
+                    </label>
+                  </div>
+                  {edgeFades?.in && edgeFades.in.duration > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '11px', width: '50px', color: 'var(--text-muted)' }}>Duration</span>
+                        <input
+                          type="range"
+                          className="inspector-slider"
+                          min={0.2}
+                          max={3.0}
+                          step={0.1}
+                          value={edgeFades.in.duration}
+                          onChange={(e) => {
+                            const durationVal = parseFloat(e.target.value)
+                            onUpdateEdgeFades?.({
+                              ...edgeFades,
+                              in: { ...edgeFades.in!, duration: durationVal },
+                            })
+                          }}
+                        />
+                        <span style={{ fontSize: '11px', width: '32px' }}>{edgeFades.in.duration.toFixed(1)}s</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '11px', width: '50px', color: 'var(--text-muted)' }}>Color</span>
+                        <input
+                          type="color"
+                          className="native-color-picker"
+                          value={edgeFades.in.color || '#000000'}
+                          onChange={(e) => {
+                            const color = e.target.value
+                            onUpdateEdgeFades?.({
+                              ...edgeFades,
+                              in: { ...edgeFades.in!, color },
+                            })
+                          }}
+                        />
+                        <select
+                          className="inspector-select"
+                          style={{ flex: 1, padding: '2px 4px', fontSize: '11px' }}
+                          value={edgeFades.in.easing || 'ease-in-out'}
+                          onChange={(e) => {
+                            const easing = e.target.value as TransitionEasing
+                            onUpdateEdgeFades?.({
+                              ...edgeFades,
+                              in: { ...edgeFades.in!, easing },
+                            })
+                          }}
+                        >
+                          <option value="ease-in-out">Ease In-Out</option>
+                          <option value="linear">Linear</option>
+                          <option value="ease-in">Ease In</option>
+                          <option value="ease-out">Ease Out</option>
+                          <option value="smoothstep">Smoothstep</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Fade Out */}
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 600 }}>Fade Out (End)</span>
+                    <label style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(edgeFades?.out && edgeFades.out.duration > 0)}
+                        onChange={(e) => {
+                          const active = e.target.checked
+                          onUpdateEdgeFades?.({
+                            ...edgeFades,
+                            out: active
+                              ? { edge: 'out', duration: 1.0, color: '#000000', easing: 'ease-in-out' }
+                              : undefined,
+                          })
+                        }}
+                      />
+                      Enable
+                    </label>
+                  </div>
+                  {edgeFades?.out && edgeFades.out.duration > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '11px', width: '50px', color: 'var(--text-muted)' }}>Duration</span>
+                        <input
+                          type="range"
+                          className="inspector-slider"
+                          min={0.2}
+                          max={3.0}
+                          step={0.1}
+                          value={edgeFades.out.duration}
+                          onChange={(e) => {
+                            const durationVal = parseFloat(e.target.value)
+                            onUpdateEdgeFades?.({
+                              ...edgeFades,
+                              out: { ...edgeFades.out!, duration: durationVal },
+                            })
+                          }}
+                        />
+                        <span style={{ fontSize: '11px', width: '32px' }}>{edgeFades.out.duration.toFixed(1)}s</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '11px', width: '50px', color: 'var(--text-muted)' }}>Color</span>
+                        <input
+                          type="color"
+                          className="native-color-picker"
+                          value={edgeFades.out.color || '#000000'}
+                          onChange={(e) => {
+                            const color = e.target.value
+                            onUpdateEdgeFades?.({
+                              ...edgeFades,
+                              out: { ...edgeFades.out!, color },
+                            })
+                          }}
+                        />
+                        <select
+                          className="inspector-select"
+                          style={{ flex: 1, padding: '2px 4px', fontSize: '11px' }}
+                          value={edgeFades.out.easing || 'ease-in-out'}
+                          onChange={(e) => {
+                            const easing = e.target.value as TransitionEasing
+                            onUpdateEdgeFades?.({
+                              ...edgeFades,
+                              out: { ...edgeFades.out!, easing },
+                            })
+                          }}
+                        >
+                          <option value="ease-in-out">Ease In-Out</option>
+                          <option value="linear">Linear</option>
+                          <option value="ease-in">Ease In</option>
+                          <option value="ease-out">Ease Out</option>
+                          <option value="smoothstep">Smoothstep</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -512,7 +712,7 @@ export function Timeline({
             }
             title="Delete selected item (Del / Backspace)"
           >
-            <span className="tool-icon">🗑</span>
+            <span className="tool-icon"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg></span>
             <span>Delete</span>
             <kbd className="key-shortcut">Del</kbd>
           </button>
@@ -625,7 +825,7 @@ export function Timeline({
               return (
                 <div
                   key={item.id}
-                  className={`timeline-item${item.id === selectedItemId ? ' selected' : ''}${dragging ? ' dragging' : ''}`}
+                  className={`timeline-item${item.id === selectedItemId ? ' selected' : ''}${dragging ? ' dragging' : ''}${filterDropId === item.id ? ' effect-drop' : ''}`}
                   style={{
                     left: starts[index] * pps,
                     width: itemLength(item) * pps,
@@ -634,9 +834,25 @@ export function Timeline({
                   }}
                   title={`${clip?.name ?? 'Missing clip'} · ${formatDuration(itemLength(item))}`}
                   onPointerDown={(event) => beginItemDrag(event, index)}
+                  onDragOver={(event) => {
+                    if (!event.dataTransfer.types.includes(FILTER_DRAG_TYPE)) return
+                    event.preventDefault()
+                    event.stopPropagation()
+                    event.dataTransfer.dropEffect = 'copy'
+                    setFilterDropId(item.id)
+                  }}
+                  onDragLeave={() => setFilterDropId(null)}
+                  onDrop={(event) => {
+                    setFilterDropId(null)
+                    if (!event.dataTransfer.types.includes(FILTER_DRAG_TYPE)) return
+                    event.preventDefault()
+                    event.stopPropagation()
+                    const filter = event.dataTransfer.getData(FILTER_DRAG_TYPE)
+                    if (filter) onApplyFilterToItem?.(item.id, filter as FilterType)
+                  }}
                 >
                   <span className="item-label">
-                    <span className="video-badge-mini" aria-hidden="true">🎬</span>
+                    
                     {clip?.name}
                   </span>
                   <button
@@ -647,7 +863,7 @@ export function Timeline({
                     onPointerDown={(event) => event.stopPropagation()}
                     onClick={() => onToggleMute(item.id)}
                   >
-                    {item.muted ? '🔇' : '🔊'}
+                    {item.muted ? (<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><line x1="23" y1="9" x2="17" y2="15" /><line x1="17" y1="9" x2="23" y2="15" /></svg>) : (<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" /><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" /></svg>)}
                   </button>
                   <div
                     className="trim-handle in"
@@ -731,6 +947,7 @@ export function Timeline({
               onAddClip={(clipId, start) => onAddAudioClip(clipId, start, tIndex)}
               onMoveItem={onMoveAudioItem}
               onTrimItem={onTrimAudioItem}
+              onApplyEffect={onApplyAudioEffectToItem}
               onVolumeChange={onAudioVolumeChange}
             />
           ))}

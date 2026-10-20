@@ -19,11 +19,10 @@ describe('Audio effects presets and configuration', () => {
     assert.ok(uniqueIds.has('robot'))
   })
 
-  it('ensures each preset has non-empty metadata (name, description, icon, category)', () => {
+  it('ensures each preset has non-empty metadata (name, description, category)', () => {
     for (const preset of AUDIO_EFFECT_PRESETS) {
       assert.ok(preset.name.length > 0)
       assert.ok(preset.description.length > 0)
-      assert.ok(preset.icon.length > 0)
       assert.ok(['eq', 'creative', 'spatial'].includes(preset.category))
     }
   })

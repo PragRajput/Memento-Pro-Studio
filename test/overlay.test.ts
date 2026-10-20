@@ -59,7 +59,7 @@ describe('Overlay System', () => {
     assert.equal(item.opacity, 0.25)
   })
 
-  it('provides all expected VFX presets with icons and descriptions', () => {
+  it('provides all expected VFX presets with descriptions', () => {
     const ids = VFX_OVERLAY_PRESETS.map((p) => p.id)
     assert.ok(ids.includes('letterbox'))
     assert.ok(ids.includes('vignette'))
@@ -71,7 +71,6 @@ describe('Overlay System', () => {
 
     for (const preset of VFX_OVERLAY_PRESETS) {
       assert.ok(preset.name.length > 0)
-      assert.ok(preset.icon.length > 0)
       assert.ok(preset.description.length > 0)
     }
   })
@@ -85,7 +84,6 @@ describe('Overlay System', () => {
 
     for (const preset of LOWER_THIRD_PRESETS) {
       assert.ok(preset.name.length > 0)
-      assert.ok(preset.icon.length > 0)
     }
   })
 })
@@ -225,5 +223,58 @@ describe('Overlay entrance and exit', () => {
   it('is neutral for a zero-length overlay rather than dividing by zero', () => {
     const item = overlay('a', 'color', { start: 0, duration: 0, overlayAnimIn: 'fade' })
     assert.equal(isNeutralOverlayAnimation(overlayAnimationAt(item, 0)), true)
+  })
+
+  it('supports PiP shapes, rotation, and drop shadows', () => {
+    const pip = overlay('pip-1', 'media', {
+      ...base,
+      pipShape: 'circle',
+      pipRotation: 15,
+      pipFlipH: true,
+      pipShadow: true,
+      pipShadowBlur: 20,
+      pipShadowY: 10,
+      pipShadowOpacity: 0.75,
+    })
+    assert.equal(pip.pipShape, 'circle')
+    assert.equal(pip.pipRotation, 15)
+    assert.equal(pip.pipFlipH, true)
+    assert.equal(pip.pipShadow, true)
+    assert.equal(pip.pipShadowBlur, 20)
+    assert.equal(pip.pipShadowY, 10)
+    assert.equal(pip.pipShadowOpacity, 0.75)
+  })
+
+  it('supports VFX letterbox ratio presets, vignette feather, and bokeh count', () => {
+    const vfx = overlay('vfx-1', 'vfx', {
+      ...base,
+      vfxType: 'letterbox',
+      vfxLetterboxRatio: '2.39',
+      vfxVignetteFeather: 65,
+      vfxBokehCount: 40,
+    })
+    assert.equal(vfx.vfxLetterboxRatio, '2.39')
+    assert.equal(vfx.vfxVignetteFeather, 65)
+    assert.equal(vfx.vfxBokehCount, 40)
+  })
+
+  it('supports color wash shapes and scrim sizes', () => {
+    const wash = overlay('wash-1', 'color', {
+      ...base,
+      colorWashShape: 'scrim-bottom',
+      colorWashScrimSize: 35,
+    })
+    assert.equal(wash.colorWashShape, 'scrim-bottom')
+    assert.equal(wash.colorWashScrimSize, 35)
+  })
+
+  it('supports lower-third scale and blur', () => {
+    const lt = overlay('lt-1', 'lower-third', {
+      ...base,
+      lowerThirdScale: 1.25,
+      lowerThirdBackdropBlur: 16,
+    })
+    assert.equal(lt.lowerThirdScale, 1.25)
+    assert.equal(lt.lowerThirdBackdropBlur, 16)
   })
 })

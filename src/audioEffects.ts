@@ -4,7 +4,6 @@ export interface AudioEffectPreset {
   id: AudioEffectType
   name: string
   description: string
-  icon: string
   category: 'eq' | 'creative' | 'spatial'
 }
 
@@ -13,63 +12,54 @@ export const AUDIO_EFFECT_PRESETS: readonly AudioEffectPreset[] = [
     id: 'none',
     name: 'Normal',
     description: 'Clean original audio without processing',
-    icon: '✨',
     category: 'eq',
   },
   {
     id: 'bass-boost',
     name: 'Bass Boost',
     description: 'Deep punchy low-end for music beats & kicks',
-    icon: '🔊',
     category: 'eq',
   },
   {
     id: 'treble-boost',
     name: 'Treble Clarity',
     description: 'Crisp bright highs and presence for instruments',
-    icon: '💎',
     category: 'eq',
   },
   {
     id: 'vocal-enhance',
     name: 'Vocal Enhance',
     description: 'Cleans dialogue, cuts rumble, boosts voice clarity',
-    icon: '🎙️',
     category: 'eq',
   },
   {
     id: 'underwater',
     name: 'Underwater',
     description: 'Muffled low-pass filter (club bathroom effect)',
-    icon: '🌊',
     category: 'creative',
   },
   {
     id: 'telephone',
     name: 'Vintage Radio',
     description: 'Narrow bandpass walkie-talkie / 1950s AM speaker',
-    icon: '📻',
     category: 'creative',
   },
   {
     id: 'lo-fi',
     name: 'Lo-Fi Chill',
     description: 'Soft high-cut with warm saturated vintage tone',
-    icon: '☕',
     category: 'creative',
   },
   {
     id: 'concert-hall',
     name: 'Concert Hall',
     description: 'Expansive spatial echo and reverberant depth',
-    icon: '🏛️',
     category: 'spatial',
   },
   {
     id: 'robot',
     name: 'Sci-Fi Synth',
     description: 'Resonant metallic futuristic modulation',
-    icon: '🤖',
     category: 'creative',
   },
 ]

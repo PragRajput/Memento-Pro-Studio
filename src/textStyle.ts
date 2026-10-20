@@ -1,4 +1,216 @@
-import type { TextOverlay } from './types.ts'
+import type { TextOverlay, TitlePresetId } from './types.ts'
+
+export interface TitlePresetDefinition {
+  id: TitlePresetId
+  name: string
+  description: string
+  styles: Partial<TextOverlay>
+}
+
+export const TITLE_PRESETS: readonly TitlePresetDefinition[] = [
+  {
+    id: 'bold-caption',
+    name: 'Bold Caption',
+    description: 'High-energy uppercase headline with thick dark outline',
+    styles: {
+      textPreset: 'bold-caption',
+      fontFamily: 'Anton',
+      fontSize: 54,
+      color: '#facc15',
+      textUppercase: true,
+      textStrokeWidth: 0.08,
+      textStrokeColor: '#000000',
+      textStrokeOpacity: 1,
+      backgroundColor: 'transparent',
+    },
+  },
+  {
+    id: 'subtitle',
+    name: 'Clean Subtitle',
+    description: 'Modern readable dialogue text with dark rounded pill background',
+    styles: {
+      textPreset: 'subtitle',
+      fontFamily: 'Inter',
+      fontSize: 34,
+      color: '#ffffff',
+      backgroundColor: 'rgba(0, 0, 0, 0.7)',
+      textBgPaddingX: 0.5,
+      textBgPaddingY: 0.25,
+      textBgRadius: 0.2,
+      textStrokeWidth: 0,
+    },
+  },
+  {
+    id: 'neon',
+    name: 'Neon Glow',
+    description: 'Electrifying neon sign with vibrant colored glow',
+    styles: {
+      textPreset: 'neon',
+      fontFamily: 'Inter',
+      fontSize: 48,
+      color: '#38bdf8',
+      textGlowColor: '#0284c7',
+      textGlowBlur: 0.4,
+      textStrokeWidth: 0,
+      backgroundColor: 'transparent',
+    },
+  },
+  {
+    id: 'impact',
+    name: 'Impact Poster',
+    description: 'Heavy condensed cinematic title with dramatic drop shadow',
+    styles: {
+      textPreset: 'impact',
+      fontFamily: 'Bebas Neue',
+      fontSize: 68,
+      color: '#ffffff',
+      textUppercase: true,
+      textLetterSpacing: 0.08,
+      textShadowColor: 'rgba(0, 0, 0, 0.85)',
+      textShadowBlur: 0.15,
+      textShadowOffsetY: 0.06,
+      textStrokeWidth: 0,
+      backgroundColor: 'transparent',
+    },
+  },
+  {
+    id: 'elegant',
+    name: 'Elegant Serif',
+    description: 'Refined serif typography with generous letter tracking',
+    styles: {
+      textPreset: 'elegant',
+      fontFamily: 'Playfair Display',
+      fontSize: 42,
+      color: '#fef08a',
+      textItalic: true,
+      textLetterSpacing: 0.12,
+      backgroundColor: 'transparent',
+      textStrokeWidth: 0,
+    },
+  },
+  {
+    id: 'highlight',
+    name: 'Marker Highlight',
+    description: 'Bold text on an eye-catching bright highlighter background pill',
+    styles: {
+      textPreset: 'highlight',
+      fontFamily: 'Inter',
+      fontSize: 38,
+      color: '#000000',
+      textWeight: 800,
+      backgroundColor: '#fde047',
+      textBgPaddingX: 0.6,
+      textBgPaddingY: 0.25,
+      textBgRadius: 0.1,
+      textStrokeWidth: 0,
+    },
+  },
+  {
+    id: 'sticker',
+    name: 'Pop Sticker',
+    description: 'Playful script face with bold white sticker border',
+    styles: {
+      textPreset: 'sticker',
+      fontFamily: 'Pacifico',
+      fontSize: 46,
+      color: '#ec4899',
+      textStrokeWidth: 0.12,
+      textStrokeColor: '#ffffff',
+      textStrokeOpacity: 1,
+      textShadowColor: 'rgba(0, 0, 0, 0.4)',
+      textShadowBlur: 0.1,
+      textShadowOffsetY: 0.05,
+      backgroundColor: 'transparent',
+    },
+  },
+  {
+    id: 'lower-third-minimal',
+    name: 'Minimal Lower',
+    description: 'Sleek lower title with subtle border and crisp alignment',
+    styles: {
+      textPreset: 'lower-third-minimal',
+      fontFamily: 'Inter',
+      fontSize: 28,
+      color: '#f8fafc',
+      textAlign: 'left',
+      backgroundColor: 'rgba(15, 23, 42, 0.75)',
+      textBgPaddingX: 0.5,
+      textBgPaddingY: 0.25,
+      textBgRadius: 0.15,
+      textStrokeWidth: 0,
+    },
+  },
+]
+
+export interface TextAnimationState {
+  opacity: number
+  offsetY: number
+  scale: number
+  visibleChars?: number
+}
+
+export function textAnimationAt(item: TextOverlay, time: number): TextAnimationState {
+  const local = time - item.start
+  if (item.duration <= 0 || local < 0 || local > item.duration) {
+    return { opacity: 0, offsetY: 0, scale: 1 }
+  }
+  const half = item.duration / 2
+  const inKind = item.textAnimIn ?? 'none'
+  const outKind = item.textAnimOut ?? 'none'
+  const inDur = Math.min(item.textAnimInDuration ?? 0.4, half)
+  const outDur = Math.min(item.textAnimOutDuration ?? 0.4, half)
+
+  let opacity = 1
+  let offsetY = 0
+  let scale = 1
+  let visibleChars: number | undefined = undefined
+
+  // Entrance
+  if (inKind !== 'none' && inDur > 0 && local < inDur) {
+    const p = Math.max(0, Math.min(1, local / inDur))
+    const eased = p * p * (3 - 2 * p)
+    switch (inKind) {
+      case 'fade':
+        opacity = eased
+        break
+      case 'slide-up':
+        opacity = eased
+        offsetY = (1 - eased) * 0.4
+        break
+      case 'pop':
+        opacity = eased
+        scale = 0.7 + 0.3 * eased
+        break
+      case 'typewriter': {
+        const totalLen = item.text.length
+        visibleChars = Math.max(0, Math.min(totalLen, Math.round(eased * totalLen)))
+        break
+      }
+    }
+  }
+
+  // Exit
+  const remaining = item.duration - local
+  if (outKind !== 'none' && outDur > 0 && remaining < outDur) {
+    const p = Math.max(0, Math.min(1, remaining / outDur))
+    const eased = p * p * (3 - 2 * p)
+    switch (outKind) {
+      case 'fade':
+        opacity *= eased
+        break
+      case 'slide-up':
+        opacity *= eased
+        offsetY = -(1 - eased) * 0.4
+        break
+      case 'pop':
+        opacity *= eased
+        scale *= 0.7 + 0.3 * eased
+        break
+    }
+  }
+
+  return { opacity, offsetY, scale, visibleChars }
+}
 
 /**
  * One source of truth for how a title looks.
@@ -41,6 +253,9 @@ export interface ResolvedTextStyle {
   shadowBlurPx: number
   shadowOffsetXPx: number
   shadowOffsetYPx: number
+  glowColor: string | null
+  glowBlurPx: number
+  rotation: number
   bgColor: string | null
   bgPadXPx: number
   bgPadYPx: number
@@ -159,6 +374,9 @@ export const resolveTextStyle = (item: TextOverlay, frame: FrameSize): ResolvedT
     shadowBlurPx: (item.textShadowBlur ?? 0.08) * fontPx,
     shadowOffsetXPx: (item.textShadowOffsetX ?? 0) * fontPx,
     shadowOffsetYPx: (item.textShadowOffsetY ?? 0.03) * fontPx,
+    glowColor: item.textGlowColor ?? null,
+    glowBlurPx: (item.textGlowBlur ?? 0) * fontPx,
+    rotation: item.textRotation ?? 0,
     bgColor:
       item.backgroundColor && item.backgroundColor !== 'transparent' ? item.backgroundColor : null,
     bgPadXPx: (item.textBgPaddingX ?? 0.45) * fontPx,
