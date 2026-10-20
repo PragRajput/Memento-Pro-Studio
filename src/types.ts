@@ -169,6 +169,28 @@ export interface VideoLayerItem extends SourceRange, Transformable {
   flipV?: boolean
 }
 
+/**
+ * A look applied to the whole programme rather than one clip, so footage can be
+ * graded in one place instead of clip by clip. It carries the same fields a
+ * clip does, and is applied on top of whatever each clip already has.
+ */
+export interface MasterGrade extends Pick<
+  TimelineItem,
+  | 'filter'
+  | 'filterIntensity'
+  | 'filterExposure'
+  | 'filterContrast'
+  | 'filterSaturation'
+  | 'filterTemperature'
+  | 'filterTint'
+  | 'filterHighlights'
+  | 'filterShadows'
+  | 'filterVignette'
+  | 'filterGrain'
+  | 'filterSharpen'
+  | 'filterFade'
+> {}
+
 export type TransitionType =
   | 'crossfade'
   | 'fade-black'

@@ -1,21 +1,45 @@
+
+/* ============================================================
+   Timeline palette
+   ------------------------------------------------------------
+   Clips are graphite, separated by a faint tint rather than a
+   saturated hue, so the only bright thing on the timeline is the
+   current selection. Five competing colours read as noise.
+   ============================================================ */
+:root {
+  --lane-rule: rgba(255, 255, 255, 0.05);
+  --clip-video: #3f4c5e;
+  --clip-layer: #4a5970;
+  --clip-layer-hover: #556480;
+  --clip-title: #4c4661;
+  --clip-overlay: #4b4f56;
+  --clip-overlay-hover: #575c64;
+  --clip-audio: #3b5a4b;
+  --clip-transition: #52496a;
+  --clip-edge: rgba(255, 255, 255, 0.14);
+  --clip-edge-hover: rgba(255, 255, 255, 0.28);
+  --clip-selected: #60a5fa;
+  --keyframe-mark: #d4a35a;
+}
 /* ==========================================================================
-   Mini Video Editor - Premium Dark Studio Theme
+   Memento - Premium Dark Studio Theme
    ========================================================================== */
 
 /* Main Layout Grid */
 .app {
   display: grid;
   grid-template-areas:
-    'header header header'
-    'rail   media   preview'
-    'rail   media   timeline';
-  grid-template-columns: 56px 300px 1fr;
-  grid-template-rows: 48px 1fr minmax(290px, 35vh);
+    'header header'
+    'media  preview'
+    'media  timeline';
+  grid-template-columns: var(--side-panel-width, 300px) 1fr;
+  grid-template-rows: 48px 1fr var(--timeline-height, 360px);
   gap: 1px;
   height: 100vh;
   width: 100vw;
   background: var(--panel-border-subtle);
   overflow: hidden;
+  position: relative;
 }
 
 /* ==========================================================================
@@ -24,10 +48,14 @@
 
 .app-header {
   grid-area: header;
-  display: flex;
+  /* Equal side columns keep the project status optically centred; with
+     space-between it drifted whenever an action button changed width. */
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
+  gap: 12px;
+  height: 48px;
+  padding: 0 14px;
   background: var(--panel-header);
   border-bottom: 1px solid var(--panel-border);
   z-index: 10;
@@ -36,7 +64,9 @@
 .app-brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
+  justify-self: start;
+  min-width: 0;
 }
 
 .brand-logo-box {
@@ -94,7 +124,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 12px;
+  justify-self: center;
+  height: 28px;
+  padding: 0 12px;
+  white-space: nowrap;
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -114,8 +147,9 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
-  border-radius: var(--radius-sm);
+  height: 30px;
+  padding: 0 14px;
+  border-radius: var(--radius-xs);
   background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
   color: #fff;
   font-size: 12px;
@@ -178,7 +212,6 @@
   grid-area: media;
   border-right: 1px solid var(--panel-border);
   overflow-y: auto;
-  /* Spans the preview and timeline rows, so it must be free to shrink and scroll. */
   min-height: 0;
   outline: 2px dashed transparent;
   outline-offset: -4px;
@@ -515,15 +548,17 @@
   position: absolute;
   top: 6px;
   right: 6px;
-  bottom: 6px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  opacity: 0.6;
+  gap: 4px;
+  /* Hidden until the card is hovered, so the pool reads as thumbnails. */
+  opacity: 0;
   transition: opacity var(--transition-fast);
 }
 
-.clip-item:hover .clip-actions {
+
+.clip-item:hover .clip-actions,
+.clip-item:focus-within .clip-actions {
   opacity: 1;
 }
 
@@ -1027,8 +1062,21 @@
 .group-value-badge {
   font-size: 11px;
   font-weight: 600;
-  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-variant-numeric: tabular-nums;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #93c5fd;
+  letter-spacing: 0.02em;
+  transition: all var(--transition-fast);
+}
+
+.group-value-badge:hover {
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.35);
+  color: #bfdbfe;
 }
 
 .drag-hint {
@@ -1061,11 +1109,193 @@
   gap: 8px;
 }
 
-.inspector-slider {
+/* ==========================================================================
+   Premium Studio Range Sliders
+   ========================================================================== */
+
+.premium-slider-wrap {
+  position: relative;
   width: 100%;
-  accent-color: var(--accent);
+  display: flex;
+  align-items: center;
+  user-select: none;
+}
+
+.premium-slider-wrap.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* Center detent notch for bipolar sliders (-100..+100, -45..+45, etc.) */
+.slider-center-notch {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 9px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.45);
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity var(--transition-fast);
+}
+
+.premium-slider-wrap:hover .slider-center-notch {
+  background: rgba(255, 255, 255, 0.75);
+}
+
+/* Universal Range Input Styles */
+input[type='range'],
+.inspector-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 22px;
+  background: transparent;
   cursor: pointer;
-  height: 14px;
+  margin: 0;
+  padding: 0;
+  position: relative;
+  z-index: 2;
+  --fill-color: var(--accent, #3b82f6);
+  --track-bg: #12151c;
+  --track-border: rgba(255, 255, 255, 0.08);
+}
+
+input[type='range']:focus,
+.inspector-slider:focus {
+  outline: none;
+}
+
+/* --- WebKit / Chromium Track --- */
+input[type='range']::-webkit-slider-runnable-track,
+.inspector-slider::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 5px;
+  cursor: pointer;
+  border-radius: 999px;
+  border: 1px solid var(--track-border);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.7),
+    0 1px 0 rgba(255, 255, 255, 0.04);
+  background: linear-gradient(
+    to right,
+    var(--track-bg) 0%,
+    var(--track-bg) var(--fill-start, 0%),
+    var(--fill-color) var(--fill-start, 0%),
+    var(--fill-color) var(--fill-end, 0%),
+    var(--track-bg) var(--fill-end, 0%),
+    var(--track-bg) 100%
+  );
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.premium-slider-wrap:hover input[type='range']::-webkit-slider-runnable-track,
+.premium-slider-wrap:hover .inspector-slider::-webkit-slider-runnable-track {
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+/* --- WebKit / Chromium Thumb --- */
+input[type='range']::-webkit-slider-thumb,
+.inspector-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffffff 0%, #e2e8f0 55%, #cbd5e1 100%);
+  border: 1.5px solid rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.65),
+    0 2px 8px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 #ffffff;
+  margin-top: -4.5px;
+  cursor: grab;
+  transition:
+    transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.12s ease,
+    background 0.12s ease;
+}
+
+input[type='range']:hover::-webkit-slider-thumb,
+.inspector-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.18);
+  box-shadow:
+    0 0 0 3px var(--accent-glow, rgba(59, 130, 246, 0.3)),
+    0 2px 6px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 #ffffff;
+}
+
+input[type='range']:active::-webkit-slider-thumb,
+.inspector-slider:active::-webkit-slider-thumb {
+  cursor: grabbing;
+  transform: scale(1.28);
+  background: #ffffff;
+  border-color: #ffffff;
+  box-shadow:
+    0 0 0 4px var(--accent-glow, rgba(59, 130, 246, 0.45)),
+    0 0 12px var(--fill-color, var(--accent, #3b82f6)),
+    0 3px 8px rgba(0, 0, 0, 0.8);
+}
+
+/* --- Firefox Track --- */
+input[type='range']::-moz-range-track,
+.inspector-slider::-moz-range-track {
+  width: 100%;
+  height: 5px;
+  cursor: pointer;
+  border-radius: 999px;
+  border: 1px solid var(--track-border);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.7),
+    0 1px 0 rgba(255, 255, 255, 0.04);
+  background: linear-gradient(
+    to right,
+    var(--track-bg) 0%,
+    var(--track-bg) var(--fill-start, 0%),
+    var(--fill-color) var(--fill-start, 0%),
+    var(--fill-color) var(--fill-end, 0%),
+    var(--track-bg) var(--fill-end, 0%),
+    var(--track-bg) 100%
+  );
+}
+
+/* --- Firefox Thumb --- */
+input[type='range']::-moz-range-thumb,
+.inspector-slider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffffff 0%, #e2e8f0 55%, #cbd5e1 100%);
+  border: 1.5px solid rgba(255, 255, 255, 0.95);
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.65),
+    0 2px 8px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 #ffffff;
+  cursor: grab;
+  transition:
+    transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.12s ease;
+}
+
+input[type='range']:hover::-moz-range-thumb,
+.inspector-slider:hover::-moz-range-thumb {
+  transform: scale(1.18);
+  box-shadow:
+    0 0 0 3px var(--accent-glow, rgba(59, 130, 246, 0.3)),
+    0 2px 6px rgba(0, 0, 0, 0.7);
+}
+
+input[type='range']:active::-moz-range-thumb,
+.inspector-slider:active::-moz-range-thumb {
+  cursor: grabbing;
+  transform: scale(1.28);
+  box-shadow:
+    0 0 0 4px var(--accent-glow, rgba(59, 130, 246, 0.45)),
+    0 0 12px var(--fill-color, var(--accent, #3b82f6)),
+    0 3px 8px rgba(0, 0, 0, 0.8);
 }
 
 .segmented-control {
@@ -1389,27 +1619,17 @@
   flex-shrink: 0;
   min-height: 42px;
   /* The toolbar shares its row with the preview column now, so it is narrower
-     than it was. Scroll the tools rather than letting the labels wrap. */
-  overflow-x: auto;
-  scrollbar-width: none;
+     than it was. Wrap onto a second row rather than scrolling: setting overflow
+     on either axis would make this a clipping context, and the tool dropdowns
+     hang below the toolbar on position:absolute. */
+  flex-wrap: wrap;
+  row-gap: 6px;
+  /* .panel-header sets space-between, which with wrapping spreads each row's
+     items to its edges and splits the tool groups apart. Pack them instead;
+     the zoom control still pushes right on its own auto margin. */
+  justify-content: flex-start;
 }
 
-.timeline-toolbar::-webkit-scrollbar {
-  height: 0;
-}
-
-.timeline-title-area {
-  display: flex;
-  align-items: center;
-}
-
-.timeline-title-area h2 {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
 
 /* Transport Controls */
 .transport-controls {
@@ -1582,18 +1802,29 @@
   flex-shrink: 0;
 }
 
+.zoom-icon-btn,
 .zoom-icon {
   font-size: 14px;
   font-weight: bold;
   user-select: none;
-  cursor: default;
+  cursor: pointer;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
+  transition: all var(--transition-fast);
+}
+
+.zoom-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
 }
 
 .zoom-slider {
-  width: 90px;
-  height: 12px;
-  accent-color: var(--accent);
-  cursor: pointer;
+  width: 100%;
 }
 
 /* Timeline Scroll & Content */
@@ -1611,6 +1842,10 @@
   min-width: 100%;
   min-height: 100%;
   padding-bottom: 24px;
+  /* Reserved column for the track badges. Padding on the content box rather
+     than on each track keeps every clientX-to-time calculation correct: a
+     track's own bounding rect moves with it. */
+  padding-left: var(--track-gutter, 54px);
 }
 
 /* Ruler */
@@ -1650,7 +1885,7 @@
 .track-hint {
   position: absolute;
   top: 50%;
-  left: 60px;
+  left: 14px;
   transform: translateY(-50%);
   margin: 0;
   color: var(--text-dim);
@@ -1660,56 +1895,49 @@
 
 /* Sticky Track Badges */
 .track-badge {
-  position: sticky;
-  left: 8px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: inline-flex;
+  position: absolute;
+  left: calc(-1 * var(--track-gutter, 54px) + 4px);
+  /* A full-height tab in the gutter, so each lane reads as its own row. */
+  top: 2px;
+  bottom: 2px;
+  width: calc(var(--track-gutter, 54px) - 10px);
+  /* Counter the horizontal scroll so the badge column stays put. Sticky cannot
+     do this: it clamps to the track, which starts at the far side of the gutter. */
+  transform: translateX(var(--timeline-scroll-x, 0px));
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 5px;
-  padding: 3px 8px;
+  justify-content: center;
+  gap: 3px;
+  padding: 0;
   border-radius: var(--radius-xs);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.04em;
   z-index: 4;
-  backdrop-filter: blur(6px);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
 }
 
+
 .video-badge {
-  background: rgba(59, 130, 246, 0.25);
-  color: #93c5fd;
-  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: rgba(255, 255, 255, 0.05);
+  color: #9fb4cc;
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .text-lane-badge {
-  background: rgba(168, 85, 247, 0.25);
-  color: #e9d5ff;
-  border: 1px solid rgba(168, 85, 247, 0.4);
+  background: rgba(255, 255, 255, 0.05);
+  color: #b3a9c6;
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .audio-badge {
-  background: rgba(16, 185, 129, 0.2);
-  color: #a7f3d0;
-  border: 1px solid rgba(16, 185, 129, 0.35);
+  background: rgba(255, 255, 255, 0.05);
+  color: #93b8a6;
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
-.remove-track-btn {
-  background: none;
-  border: none;
-  color: #f87171;
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 2px;
-  border-radius: 2px;
-}
 
-.remove-track-btn:hover {
-  background: rgba(239, 68, 68, 0.3);
-  color: #fff;
-}
 
 /* Video Track */
 .video-track {
@@ -1724,8 +1952,8 @@
 /* Audio Track */
 .audio-track {
   height: 54px;
-  background: rgba(16, 185, 129, 0.025);
-  border: 1px solid rgba(16, 185, 129, 0.12);
+  background: rgba(255, 255, 255, 0.012);
+  border: 1px solid var(--lane-rule);
   border-radius: var(--radius-xs);
   position: relative;
 }
@@ -1742,34 +1970,8 @@
   pointer-events: none;
 }
 
-/* Add Track Lane */
-.add-track-lane {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 28px;
-  margin: 6px 8px 0 8px;
-  border: 1px dashed rgba(255, 255, 255, 0.12);
-  border-radius: var(--radius-sm);
-  color: var(--text-dim);
-  font-size: 11px;
-  cursor: pointer;
-  background: rgba(255, 255, 255, 0.015);
-  transition: all var(--transition-fast);
-}
 
-.add-track-lane:hover {
-  background: rgba(59, 130, 246, 0.08);
-  border-color: rgba(59, 130, 246, 0.4);
-  color: #93c5fd;
-}
 
-.add-track-lane.drag-over {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: var(--accent);
-  color: #fff;
-  border-style: solid;
-}
 
 /* Timeline Items */
 .timeline-item {
@@ -1787,13 +1989,13 @@
 }
 
 .video-track .timeline-item {
-  background-color: #1e3a5f;
+  background-color: var(--clip-video);
   background-repeat: repeat-x;
   background-size: auto 100%;
 }
 
 .timeline-item.selected {
-  box-shadow: inset 0 0 0 2px #60a5fa, 0 0 10px rgba(59, 130, 246, 0.4);
+  box-shadow: inset 0 0 0 2px var(--clip-selected), 0 0 10px rgba(96, 165, 250, 0.35);
   z-index: 3;
 }
 
@@ -1804,18 +2006,18 @@
 }
 
 .text-item {
-  background: linear-gradient(135deg, #4c1d95 0%, #6d28d9 100%);
+  background: var(--clip-title);
   background-image: none !important;
 }
 
 .text-item.selected {
-  box-shadow: inset 0 0 0 2px #c084fc, 0 0 10px rgba(192, 132, 252, 0.4);
+  box-shadow: inset 0 0 0 2px var(--clip-selected), 0 0 10px rgba(96, 165, 250, 0.35);
 }
 
 .audio-item {
-  background-color: #064e3b;
-  background-image: linear-gradient(180deg, rgba(6, 78, 59, 0.85) 0%, rgba(4, 47, 36, 0.95) 100%);
-  border: 1px solid rgba(52, 211, 153, 0.55);
+  background-color: var(--clip-audio);
+  background-image: none;
+  border: 1px solid var(--clip-edge);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.15);
   transition: all var(--transition-fast);
 }
@@ -1827,9 +2029,8 @@
 }
 
 .audio-item.selected {
-  background-color: #059669;
-  border-color: #6ee7b7;
-  box-shadow: 0 0 0 2px #34d399, 0 0 16px rgba(52, 211, 153, 0.55);
+  border-color: var(--clip-selected);
+  box-shadow: inset 0 0 0 2px var(--clip-selected), 0 0 10px rgba(96, 165, 250, 0.35);
   z-index: 3;
 }
 
@@ -1919,39 +2120,13 @@
 }
 
 /* Audio Item Controls inside Lane */
-.audio-item-controls {
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  z-index: 2;
-  max-width: calc(100% - 24px);
-}
 
-.volume-toggle-btn {
-  background: rgba(0, 0, 0, 0.65);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  color: #fff;
-  font-size: 9px;
-  padding: 1px 4px;
-  border-radius: 2px;
-  cursor: pointer;
-  white-space: nowrap;
-}
 
-.volume-toggle-btn:hover {
-  background: rgba(0, 0, 0, 0.9);
-}
 
-.volume-slider {
-  width: 44px;
-  height: 10px;
-  accent-color: #34d399;
-  cursor: pointer;
-}
+
+
+
+
 
 /* Mute toggle for video item */
 .mute-toggle {
@@ -2040,8 +2215,8 @@
   top: 6px;
   height: calc(100% - 12px);
   border-radius: var(--radius-xs);
-  background: linear-gradient(135deg, rgba(109, 40, 217, 0.9) 0%, rgba(147, 51, 234, 0.9) 100%);
-  border: 1px solid rgba(192, 132, 252, 0.6);
+  background: var(--clip-transition);
+  border: 1px solid var(--clip-edge);
   color: #fff;
   display: flex;
   align-items: center;
@@ -2059,14 +2234,14 @@
 }
 
 .transition-chip:hover {
-  border-color: #e9d5ff;
-  box-shadow: 0 0 10px rgba(168, 85, 247, 0.6);
+  border-color: var(--clip-edge-hover);
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
 }
 
 .transition-chip.selected {
-  outline: 2px solid #fff;
+  outline: 2px solid var(--clip-selected);
   outline-offset: 1px;
-  box-shadow: 0 0 14px rgba(192, 132, 252, 0.8);
+  box-shadow: 0 0 10px rgba(96, 165, 250, 0.35);
 }
 
 .transition-icon {
@@ -2097,6 +2272,9 @@
   top: 0;
   bottom: 0;
   width: 2px;
+  /* `left` already carries the badge gutter: an absolutely positioned child
+     resolves against the padding box, so it would otherwise start inside the
+     gutter while the ruler and lanes, being in-flow, start at the content box. */
   margin-left: -1px;
   background: #ef4444;
   pointer-events: none;
@@ -2242,7 +2420,8 @@
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-self: end;
+  gap: 7px;
 }
 
 .header-shortcuts-btn,
@@ -2486,15 +2665,6 @@
    Header History (Undo/Redo) & Aspect Ratio Selector
    ========================================================================== */
 
-.header-history-group {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius-sm);
-  padding: 2px;
-}
 
 .btn-header-history {
   display: inline-flex;
@@ -2525,10 +2695,11 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 8px;
+  height: 30px;
+  padding: 0 9px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--panel-border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
 }
 
 .aspect-ratio-icon {
@@ -2749,7 +2920,7 @@
   margin-top: 6px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
 }
 
 .intensity-label-row {
@@ -2758,16 +2929,64 @@
   align-items: center;
 }
 
+.manual-grade-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.grade-slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px 6px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition-fast);
+}
+
+.grade-slider-row:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.grade-label-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
 .control-sublabel {
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 500;
   color: var(--text-muted);
+  letter-spacing: 0.01em;
 }
 
 .control-subvalue {
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-variant-numeric: tabular-nums;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  user-select: none;
+}
+
+.control-subvalue:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.control-subvalue.active {
+  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.35);
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.2);
 }
 
 /* Transform Actions Grid */
@@ -2968,33 +3187,32 @@
 /* Timeline Overlay Track & Items */
 .overlay-track {
   height: 48px;
-  background: rgba(245, 158, 11, 0.025);
-  border-top: 1px solid rgba(245, 158, 11, 0.12);
-  border-bottom: 1px solid rgba(245, 158, 11, 0.12);
+  background: rgba(255, 255, 255, 0.012);
+  border-top: 1px solid var(--lane-rule);
+  border-bottom: 1px solid var(--lane-rule);
 }
 
 .overlay-badge {
-  background: rgba(245, 158, 11, 0.22);
-  color: #fde68a;
-  border: 1px solid rgba(245, 158, 11, 0.4);
+  background: rgba(255, 255, 255, 0.05);
+  color: #c2b394;
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .overlay-item {
-  background: linear-gradient(135deg, #78350f 0%, #b45309 100%);
-  border: 1px solid rgba(245, 158, 11, 0.5);
+  background: var(--clip-overlay);
+  border: 1px solid var(--clip-edge);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 
 .overlay-item:hover {
-  background: linear-gradient(135deg, #92400e 0%, #d97706 100%);
-  border-color: rgba(251, 191, 36, 0.8);
+  background: var(--clip-overlay-hover);
+  border-color: var(--clip-edge-hover);
   box-shadow: 0 0 12px rgba(245, 158, 11, 0.35);
 }
 
 .overlay-item.selected {
-  background: linear-gradient(135deg, #b45309 0%, #d97706 100%);
-  border-color: #fde68a;
-  box-shadow: 0 0 0 2px #f59e0b, 0 0 16px rgba(245, 158, 11, 0.55);
+  border-color: var(--clip-selected);
+  box-shadow: inset 0 0 0 2px var(--clip-selected), 0 0 10px rgba(96, 165, 250, 0.35);
   z-index: 3;
 }
 
@@ -3363,30 +3581,49 @@
 
 .video-layer-track {
   height: 56px;
-  background: rgba(99, 102, 241, 0.03);
-  border-top: 1px solid rgba(99, 102, 241, 0.14);
-  border-bottom: 1px solid rgba(99, 102, 241, 0.14);
+  background: rgba(255, 255, 255, 0.012);
+  border-top: 1px solid var(--lane-rule);
+  border-bottom: 1px solid var(--lane-rule);
 }
 
 .video-layer-badge {
-  background: rgba(99, 102, 241, 0.24);
-  color: #c7d2fe;
-  border: 1px solid rgba(99, 102, 241, 0.45);
+  background: rgba(255, 255, 255, 0.05);
+  color: #a7b0c8;
+  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 .track-badge-remove {
-  margin-left: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  margin: 0;
   padding: 0;
-  width: 13px;
-  height: 13px;
-  line-height: 1;
-  background: none;
+  background: rgba(255, 255, 255, 0.1);
   border: none;
-  border-radius: 50%;
-  color: #fca5a5;
-  font-size: 13px;
+  border-radius: 3px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1;
   cursor: pointer;
+  /* Revealed on hover so the tab stays quiet until you reach for it. */
+  opacity: 0;
+  transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
 }
+
+.track:hover .track-badge-remove,
+.track-badge:hover .track-badge-remove,
+.track-badge-remove:focus-visible {
+  opacity: 1;
+}
+
+
+.track-badge-remove:hover {
+  background: rgba(248, 113, 113, 0.9);
+  color: #fff;
+}
+
 
 .track-badge-remove:hover {
   background: rgba(248, 113, 113, 0.2);
@@ -3398,13 +3635,13 @@
   align-items: center;
   gap: 6px;
   padding-left: 2px;
-  background: linear-gradient(135deg, #312e81 0%, #4338ca 100%);
-  border: 1px solid rgba(129, 140, 248, 0.5);
+  background: var(--clip-layer);
+  border: 1px solid var(--clip-edge);
 }
 
 .video-layer-item:hover {
-  background: linear-gradient(135deg, #3730a3 0%, #4f46e5 100%);
-  border-color: rgba(165, 180, 252, 0.8);
+  background: var(--clip-layer-hover);
+  border-color: var(--clip-edge-hover);
 }
 
 .video-layer-item .item-thumb {
@@ -3440,10 +3677,9 @@
   width: 7px;
   height: 7px;
   margin-left: -3.5px;
-  background: #fbbf24;
+  background: var(--keyframe-mark);
   border-radius: 1px;
   transform: rotate(45deg);
-  box-shadow: 0 0 3px rgba(251, 191, 36, 0.9);
 }
 
 /* ---------- Keyframe editor (inspector) ---------- */
@@ -3550,7 +3786,7 @@
 
 .keyframe-row input[type='range'] {
   width: 100%;
-  accent-color: #fbbf24;
+  --fill-color: #fbbf24;
 }
 
 .keyframe-lane {
@@ -3620,156 +3856,424 @@
 }
 
 
+
+
 /* ============================================================
-   Left panel rail and the browsable libraries behind it
+   Panel dividers
    ============================================================ */
 
-.side-rail {
-  grid-area: rail;
+/* The hit area is wider than the visible line, so the divider is easy to grab
+   without drawing a thick border between every panel. */
+.splitter {
+  position: absolute;
+  z-index: 40;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 6px;
-  background: var(--panel-header);
-  border-right: 1px solid var(--panel-border);
-  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  touch-action: none;
 }
 
-.side-rail-btn {
+.splitter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.splitter-vertical {
+  cursor: col-resize;
+  top: 48px;
+  bottom: var(--timeline-height, 360px);
+  /* Centre the grab area on the boundary between the panel and the preview. */
+  left: calc(var(--side-panel-width, 300px) - 3px);
+  width: 7px;
+}
+
+.splitter-horizontal {
+  cursor: row-resize;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--timeline-height, 360px) - 3px);
+  height: 7px;
+}
+
+.splitter-grip {
+  background: transparent;
+  border-radius: 2px;
+  transition: background var(--transition-fast);
+}
+
+.splitter-vertical .splitter-grip {
+  width: 3px;
+  height: 36px;
+}
+
+.splitter-horizontal .splitter-grip {
+  width: 36px;
+  height: 3px;
+}
+
+.splitter:hover .splitter-grip,
+.splitter:focus-visible .splitter-grip,
+.splitter:active .splitter-grip {
+  background: var(--accent);
+}
+
+
+/* A menu portalled to document.body: it is positioned by the Popover component,
+   so it must not carry the absolute offsets the in-flow version used. */
+.popover-panel {
+  z-index: 200;
+}
+
+.popover-panel .overlay-menu-dropdown.is-portalled {
+  position: static;
+  top: auto;
+  left: auto;
+  min-width: 0;
+  width: 100%;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  animation: zoom-in-dialog 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+
+/* Wraps the programme picture so the master grade applies to footage only,
+   leaving titles and overlays ungraded above it. */
+.preview-program {
+  position: absolute;
+  inset: 0;
+}
+
+
+.master-grade-panel {
+  padding: 12px;
+  gap: 10px;
+}
+
+.master-grade-head {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 3px;
-  padding: 8px 2px;
-  border: 1px solid transparent;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+/* ============================================================
+   Header menu and About dialog
+   ============================================================ */
+
+.header-menu-wrap {
+  position: relative;
+  display: flex;
+}
+
+.header-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
   border-radius: var(--radius-xs);
-  background: none;
-  color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--panel-border);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
   transition: all var(--transition-fast);
 }
 
-.side-rail-btn:hover {
-  background: rgba(255, 255, 255, 0.05);
+.header-menu-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
   color: var(--text);
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
-.side-rail-btn.active {
-  background: rgba(99, 102, 241, 0.16);
-  border-color: rgba(99, 102, 241, 0.4);
-  color: #c7d2fe;
-}
-
-.side-rail-mark {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  font-variant-numeric: tabular-nums;
-}
-
-.side-rail-label {
-  font-size: 9px;
-  letter-spacing: 0.02em;
-}
-
-.side-panel {
-  grid-area: media;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  border-right: 1px solid var(--panel-border);
-}
-
-.side-panel-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.library-group {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-
-.library-group-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.library-group-title {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
-
-.library-group-count {
-  font-size: 10px;
-  color: var(--text-dim);
-  font-variant-numeric: tabular-nums;
-}
-
-.library-hint {
-  margin: 0;
-  font-size: 10.5px;
-  line-height: 1.45;
-  color: var(--text-dim);
-}
-
-.library-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.library-card {
+.header-menu {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  padding: 6px;
+  background: var(--panel-elevated);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.header-menu button {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   padding: 7px 9px;
   text-align: left;
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: none;
+  border: none;
   border-radius: var(--radius-xs);
-  background: rgba(255, 255, 255, 0.02);
   color: var(--text);
-  cursor: grab;
-  transition: all var(--transition-fast);
+  font-size: 12px;
+  cursor: pointer;
 }
 
-.library-card:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.18);
+.header-menu button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
 }
 
-.library-card:active {
-  cursor: grabbing;
+.header-menu button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
-.library-card.active {
-  border-color: rgba(99, 102, 241, 0.55);
-  background: rgba(99, 102, 241, 0.14);
-}
-
-.library-card-name {
-  font-size: 11.5px;
-  font-weight: 600;
-}
-
-.library-card-desc {
+.header-menu button small {
   font-size: 10px;
-  line-height: 1.35;
   color: var(--text-dim);
 }
 
-/* A clip lit up as a valid drop target while an effect is dragged over it. */
-.timeline-item.effect-drop {
-  box-shadow: inset 0 0 0 2px #818cf8, 0 0 12px rgba(99, 102, 241, 0.55);
-  z-index: 3;
+.header-menu-divider {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--panel-border);
+}
+
+/* ---------- About dialog ---------- */
+
+.about-dialog {
+  position: relative;
+  max-width: 440px;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Brand gradient hairline across the top edge. */
+.about-accent {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #38bdf8, #6366f1, #a855f7);
+}
+
+.about-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-dim);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.about-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.about-hero {
+  padding: 32px 28px 22px;
+  text-align: center;
+}
+
+.about-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: 14px;
+  border-radius: 13px;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+}
+
+.about-hero h2 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+.about-tagline {
+  max-width: 320px;
+  margin: 8px auto 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.about-rule {
+  height: 1px;
+  margin: 0 28px;
+  background: linear-gradient(90deg, transparent, var(--panel-border), transparent);
+}
+
+.about-person {
+  padding: 22px 28px 20px;
+  text-align: center;
+}
+
+.about-name {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.about-role {
+  margin: 3px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  background: linear-gradient(90deg, #38bdf8, #a855f7);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.about-bio {
+  margin: 14px 0 0;
+  font-size: 12.5px;
+  line-height: 1.68;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.about-links {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 0 28px 28px;
+}
+
+.about-link {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 11px;
+  /* A grid item defaults to min-width:auto and refuses to shrink below its
+     content, so a long address pushed the card past the dialog edge. */
+  min-width: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.025);
+  text-decoration: none;
+  transition: all var(--transition-fast);
+}
+
+.about-link:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(129, 140, 248, 0.45);
+  transform: translateY(-1px);
+}
+
+.about-link-icon {
+  display: flex;
+  flex: none;
+  color: var(--text-dim);
+  transition: color var(--transition-fast);
+}
+
+.about-link:hover .about-link-icon {
+  color: #a5b4fc;
+}
+
+.about-link-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.about-link-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.about-link-hint {
+  font-size: 10px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.about-link-arrow {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.about-link:hover .about-link-arrow {
+  opacity: 1;
+}
+
+/* Undo / redo now live with the editing tools in the timeline toolbar. */
+.timeline-history-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+
+.timeline-history-group .history-btn {
+  gap: 5px;
+  padding: 0 8px;
+}
+
+.tool-caret {
+  margin-left: 1px;
+  font-size: 9px;
+  opacity: 0.6;
+}
+
+.add-menu-btn .tool-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* Icon-only actions: the glyph carries the meaning, the title attribute names it. */
+.tool-btn.icon-only {
+  width: 30px;
+  padding: 0;
+  justify-content: center;
+  gap: 0;
+}
+
+.transport-btn.step-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  padding: 0;
+}
+
+.transport-btn.play-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  padding: 0;
+}
+
+
+/* Source file names live in the clip's title tooltip, not on the clip itself:
+   the thumbnail and the waveform already identify it, and a lane of filenames
+   is the single noisiest thing on the timeline. Titles and overlays keep their
+   labels, because there the label *is* the content. */
+.audio-item .clip-name,
+.video-track .timeline-item .item-label,
+.video-layer-item .item-label {
+  display: none;
 }

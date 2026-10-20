@@ -1,6 +1,7 @@
 import { AUDIO_EFFECT_PRESETS } from '../audioEffects.ts'
 import { resetAudioItem } from '../resetSettings.ts'
 import { clamp } from '../timeline.ts'
+import { Slider } from './Slider.tsx'
 import type { AudioEffectType, AudioTimelineItem } from '../types.ts'
 
 interface AudioInspectorProps {
@@ -99,6 +100,45 @@ export function AudioInspector({
       </div>
 
       <div className="inspector-body">
+        {/* Volume Level */}
+        <div className="inspector-group">
+          <div className="group-header-row">
+            <span className="group-label">Gain / Volume</span>
+            <span
+              className="group-value-badge"
+              style={{ cursor: 'pointer' }}
+              onDoubleClick={() => handleVolumeChange(1)}
+              title="Double-click to reset to 100%"
+            >
+              {volPercent}%
+            </span>
+          </div>
+          <div className="slider-with-presets">
+            <Slider
+              min={0}
+              max={1}
+              step={0.01}
+              value={currentVolume}
+              defaultValue={1}
+              accentColor="#34d399"
+              onChange={handleVolumeChange}
+              ariaLabel="Volume slider"
+            />
+            <div className="segmented-control mini">
+              {VOLUME_PRESETS.map(({ label, val }) => (
+                <button
+                  key={label}
+                  type="button"
+                  className={Math.abs(currentVolume - val) < 0.02 ? 'active' : ''}
+                  onClick={() => handleVolumeChange(val)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
         {/* Track Selection */}
         <div className="inspector-group">
           <label className="group-label" htmlFor="audio-track-select">Track Routing</label>
@@ -146,17 +186,23 @@ export function AudioInspector({
             <div className="intensity-slider-wrap" style={{ marginTop: '10px' }}>
               <div className="group-header-row">
                 <span className="group-label" style={{ fontSize: '11px' }}>Effect Intensity</span>
-                <span className="group-value-badge">{Math.round(effectIntensity * 100)}%</span>
+                <span
+                  className="group-value-badge"
+                  style={{ cursor: 'pointer' }}
+                  onDoubleClick={() => handleIntensityChange(0.5)}
+                  title="Double-click to reset"
+                >
+                  {Math.round(effectIntensity * 100)}%
+                </span>
               </div>
-              <input
-                type="range"
-                className="inspector-slider"
+              <Slider
                 min={0}
                 max={1}
                 step={0.05}
                 value={effectIntensity}
-                onChange={(e) => handleIntensityChange(parseFloat(e.target.value))}
-                aria-label="Effect intensity slider"
+                defaultValue={0.5}
+                onChange={handleIntensityChange}
+                ariaLabel="Effect intensity slider"
               />
             </div>
           )}
@@ -182,68 +228,50 @@ export function AudioInspector({
           </div>
         </div>
 
-        {/* Volume Level */}
-        <div className="inspector-group">
-          <div className="group-header-row">
-            <span className="group-label">Gain / Volume</span>
-            <span className="group-value-badge">{volPercent}%</span>
-          </div>
-          <div className="slider-with-presets">
-            <input
-              type="range"
-              className="inspector-slider"
-              min={0}
-              max={1}
-              step={0.01}
-              value={currentVolume}
-              onChange={(event) => handleVolumeChange(Number(event.target.value))}
-              aria-label="Volume slider"
-            />
-            <div className="segmented-control mini">
-              {VOLUME_PRESETS.map(({ label, val }) => (
-                <button
-                  key={label}
-                  type="button"
-                  className={Math.abs(currentVolume - val) < 0.02 ? 'active' : ''}
-                  onClick={() => handleVolumeChange(val)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
         {/* Fade In & Fade Out */}
         <div className="inspector-group">
           <div className="group-header-row">
             <span className="group-label">Fade In</span>
-            <span className="group-value-badge">{(item.fadeIn ?? 0).toFixed(1)}s</span>
+            <span
+              className="group-value-badge"
+              style={{ cursor: 'pointer' }}
+              onDoubleClick={() => handleFadeInChange(0)}
+              title="Double-click to reset"
+            >
+              {(item.fadeIn ?? 0).toFixed(1)}s
+            </span>
           </div>
-          <input
-            type="range"
-            className="inspector-slider"
+          <Slider
             min={0}
             max={5}
             step={0.1}
             value={item.fadeIn ?? 0}
-            onChange={(e) => handleFadeInChange(parseFloat(e.target.value))}
+            defaultValue={0}
+            onChange={handleFadeInChange}
+            ariaLabel="Fade in slider"
           />
         </div>
 
         <div className="inspector-group">
           <div className="group-header-row">
             <span className="group-label">Fade Out</span>
-            <span className="group-value-badge">{(item.fadeOut ?? 0).toFixed(1)}s</span>
+            <span
+              className="group-value-badge"
+              style={{ cursor: 'pointer' }}
+              onDoubleClick={() => handleFadeOutChange(0)}
+              title="Double-click to reset"
+            >
+              {(item.fadeOut ?? 0).toFixed(1)}s
+            </span>
           </div>
-          <input
-            type="range"
-            className="inspector-slider"
+          <Slider
             min={0}
             max={5}
             step={0.1}
             value={item.fadeOut ?? 0}
-            onChange={(e) => handleFadeOutChange(parseFloat(e.target.value))}
+            defaultValue={0}
+            onChange={handleFadeOutChange}
+            ariaLabel="Fade out slider"
           />
         </div>
       </div>

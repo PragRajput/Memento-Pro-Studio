@@ -1,4 +1,4 @@
-import type { FilterType, TimelineItem } from './types.ts'
+import type { FilterType, MasterGrade, TimelineItem } from './types.ts'
 
 /**
  * Colour grading.
@@ -254,7 +254,7 @@ interface Grade {
   sharpen: number
 }
 
-export const readGrade = (item: TimelineItem | null | undefined): Grade => ({
+export const readGrade = (item: MasterGrade | null | undefined): Grade => ({
   exposure: item?.filterExposure ?? 0,
   contrast: item?.filterContrast ?? 0,
   saturation: item?.filterSaturation ?? 0,
@@ -326,7 +326,7 @@ const hashKey = (key: string): string => {
 export const getCssFilter = (
   type?: FilterType,
   intensity = 1,
-  item?: TimelineItem | null,
+  item?: MasterGrade | null,
 ): string => {
   const grade = readGrade(item)
   const strength = clamp01(intensity)
@@ -440,8 +440,30 @@ export function vignetteAlpha(strength: number | undefined): number {
   return VIGNETTE.peakAlpha * Math.min(1, Math.max(0, (strength ?? 0) / 100))
 }
 
+/** The manual grading controls, i.e. everything except the preset itself. */
+const MANUAL_GRADE_KEYS = [
+  'filterExposure',
+  'filterContrast',
+  'filterSaturation',
+  'filterTemperature',
+  'filterTint',
+  'filterHighlights',
+  'filterShadows',
+  'filterFade',
+  'filterVignette',
+  'filterGrain',
+  'filterSharpen',
+] as const
+
+/** Clear every manual control, leaving the chosen preset alone. */
+export function clearManualGrade<T extends MasterGrade>(grade: T): T {
+  const next = { ...grade }
+  for (const key of MANUAL_GRADE_KEYS) next[key] = undefined
+  return next
+}
+
 /** True when this clip carries any manual grading beyond its preset. */
-export const hasManualGrade = (item?: TimelineItem | null): boolean => !isNeutralGrade(readGrade(item))
+export const hasManualGrade = (item?: MasterGrade | null): boolean => !isNeutralGrade(readGrade(item))
 
 /** Build CSS transform string for clip rotation and mirroring. */
 export const getClipTransform = (item?: TimelineItem | null): string => {

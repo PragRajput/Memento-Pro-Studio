@@ -13,10 +13,9 @@ import { ExportDialog } from './components/ExportDialog.tsx'
 import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal.tsx'
 import type { MediaSelection } from './components/MediaBin.tsx'
 import { MediaBin } from './components/MediaBin.tsx'
-import { EffectsPanel } from './components/EffectsPanel.tsx'
-import { SideRail } from './components/SideRail.tsx'
-import type { SidePanelId } from './components/SideRail.tsx'
-import { TransitionsPanel } from './components/TransitionsPanel.tsx'
+import { Splitter } from './components/Splitter.tsx'
+import { Popover } from './components/Popover.tsx'
+import { AboutModal } from './components/AboutModal.tsx'
 import { Preview } from './components/Preview.tsx'
 import { Timeline } from './components/Timeline.tsx'
 import { outputSizeForAspectRatio } from './export/plan.ts'
@@ -55,13 +54,37 @@ import {
   createTransition,
   maxTransitionDuration,
 } from './transitionTimeline.ts'
-import type { AnimatableProperty, AspectRatio, AudioClip, AudioEffectType, AudioTimelineItem, EdgeFades, FilterType, Keyframe, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, TransitionType, VideoLayerItem } from './types.ts'
+import type { AnimatableProperty, AspectRatio, AudioClip, MasterGrade, AudioTimelineItem, EdgeFades, Keyframe, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, TransitionType, VideoLayerItem } from './types.ts'
 import { removeKeyframe, setKeyframe, updateKeyframe } from './keyframes.ts'
 import { useAudioLanePlayback } from './useAudioLanePlayback.ts'
 import { useHistory } from './useHistory.ts'
 import type { HistorySnapshot } from './useHistory.ts'
 import { useSequencePlayer } from './useSequencePlayer.ts'
 import './App.css'
+
+const DEFAULT_SIDE_PANEL_WIDTH = 300
+const DEFAULT_TIMELINE_HEIGHT = 360
+
+/**
+ * Panel sizes are a per-viewer convenience, so they live in localStorage rather
+ * than the project. Reads are guarded: storage throws in a private window.
+ */
+function readStoredSize(key: string, fallback: number): number {
+  try {
+    const stored = Number(window.localStorage.getItem(key))
+    return Number.isFinite(stored) && stored > 0 ? stored : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function storeSize(key: string, value: number) {
+  try {
+    window.localStorage.setItem(key, String(value))
+  } catch {
+    // A viewer with storage blocked simply loses the preference.
+  }
+}
 
 function App() {
   const [clips, setClips] = useState<MediaClip[]>([])
@@ -72,12 +95,17 @@ function App() {
   const [items, setItems] = useState<TimelineItem[]>([])
   const [transitions, setTransitions] = useState<Transition[]>([])
   const [audioItems, setAudioItems] = useState<AudioTimelineItem[]>([])
-  const [audioTrackCount, setAudioTrackCount] = useState(2)
+  const [audioTrackCount, setAudioTrackCount] = useState(1)
   const [textItems, setTextItems] = useState<TextOverlay[]>([])
   const [overlayItems, setOverlayItems] = useState<OverlayItem[]>([])
   const [videoLayers, setVideoLayers] = useState<VideoLayerItem[]>([])
-  const [videoLayerCount, setVideoLayerCount] = useState(1)
-  const [sidePanel, setSidePanel] = useState<SidePanelId>('media')
+  const [videoLayerCount, setVideoLayerCount] = useState(0)
+  const [masterGrade, setMasterGrade] = useState<MasterGrade>({})
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false)
+  const [aboutOpen, setAboutOpen] = useState(false)
+  const headerMenuAnchor = useRef<HTMLButtonElement>(null)
+  const [sidePanelWidth, setSidePanelWidth] = useState(() => readStoredSize('mve.sidePanelWidth', DEFAULT_SIDE_PANEL_WIDTH))
+  const [timelineHeight, setTimelineHeight] = useState(() => readStoredSize('mve.timelineHeight', DEFAULT_TIMELINE_HEIGHT))
   const [selectedLayerItemId, setSelectedLayerItemId] = useState<string | null>(null)
 
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>('16:9')
@@ -222,6 +250,7 @@ function App() {
     overlayItems,
     videoLayers,
     edgeFades,
+    masterGrade,
   )
 
   // 1. Rehydrate project from IndexedDB on initial mount
@@ -238,10 +267,15 @@ function App() {
         if (restored.overlayItems) {
           setOverlayItems(restored.overlayItems)
         }
+        if (restored.masterGrade) {
+          setMasterGrade(restored.masterGrade)
+        }
         if (restored.videoLayers) {
           setVideoLayers(restored.videoLayers)
           setVideoLayerCount(
-            Math.max(1, ...restored.videoLayers.map((layer) => layer.trackIndex + 1)),
+            restored.videoLayers.length === 0
+              ? 0
+              : Math.max(...restored.videoLayers.map((layer) => layer.trackIndex + 1)),
           )
         }
         setTransitions(restored.transitions)
@@ -317,6 +351,7 @@ function App() {
         overlayItems,
         videoLayers,
         edgeFades,
+        masterGrade,
       )
       setSaveStatus('saved')
     }, 800)
@@ -334,6 +369,7 @@ function App() {
     effectiveTrackCount,
     aspectRatio,
     edgeFades,
+    masterGrade,
   ])
 
   // 3. Clear current project and reset to clean state
@@ -349,8 +385,9 @@ function App() {
     setTextItems([])
     setOverlayItems([])
     setVideoLayers([])
+    setMasterGrade({})
     setEdgeFades({})
-    setVideoLayerCount(1)
+    setVideoLayerCount(0)
     setSelectedLayerItemId(null)
     setTransitions([])
     setAudioTrackCount(2)
@@ -685,8 +722,11 @@ function App() {
   }
 
   const removeVideoLayerTrack = (trackIndex: number) => {
+    // Refuse while the lane still holds clips, so removing a track can never
+    // quietly delete work; the button is hidden in that state anyway.
+    if (videoLayers.some((layer) => layer.trackIndex === trackIndex)) return
     setVideoLayers((current) => removeVideoLayer(current, trackIndex))
-    setVideoLayerCount((count) => Math.max(1, count - 1))
+    setVideoLayerCount((count) => Math.max(0, count - 1))
   }
 
   const addClipToVideoLayer = (clipId: string, trackIndex: number, desiredStart?: number) => {
@@ -798,6 +838,8 @@ function App() {
     )
   }
 
+  const selectedAudioItem = audioItems.find((item) => item.id === validSelectedAudioItemId) ?? null
+
   const setAudioVolume = (id: string, volume: number) => {
     setAudioItems((current) => current.map((item) => (item.id === id ? { ...item, volume } : item)))
   }
@@ -812,49 +854,6 @@ function App() {
 
   const toggleMuted = (id: string) => {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, muted: !item.muted } : item)))
-  }
-
-  // --- Effects library: apply to whatever is selected ---
-
-  /** The clip a colour look would land on: a base-track clip, or a layer clip. */
-  const selectedClipForEffects =
-    items.find((item) => item.id === validSelectedItemId) ??
-    videoLayers.find((item) => item.id === validSelectedLayerItemId) ??
-    null
-
-  const selectedAudioItem = audioItems.find((item) => item.id === validSelectedAudioItemId) ?? null
-
-  const applyFilterToSelection = (filter: FilterType) => {
-    const base = items.find((item) => item.id === validSelectedItemId)
-    if (base !== undefined) {
-      setItems((current) =>
-        current.map((item) => (item.id === base.id ? { ...item, filter } : item)),
-      )
-      return
-    }
-    const layer = videoLayers.find((item) => item.id === validSelectedLayerItemId)
-    if (layer !== undefined) updateVideoLayerItem({ ...layer, filter })
-  }
-
-  const applyAudioEffectToSelection = (effect: AudioEffectType) => {
-    if (selectedAudioItem === null) return
-    updateAudioItem({ ...selectedAudioItem, effect })
-  }
-
-  /** Drop a colour look straight onto a clip, without selecting it first. */
-  const applyFilterToItem = (itemId: string, filter: FilterType) => {
-    if (items.some((item) => item.id === itemId)) {
-      setItems((current) => current.map((item) => (item.id === itemId ? { ...item, filter } : item)))
-      return
-    }
-    const layer = videoLayers.find((item) => item.id === itemId)
-    if (layer !== undefined) updateVideoLayerItem({ ...layer, filter })
-  }
-
-  const applyAudioEffectToItem = (itemId: string, effect: AudioEffectType) => {
-    setAudioItems((current) =>
-      current.map((item) => (item.id === itemId ? { ...item, effect } : item)),
-    )
   }
 
   const updateTimelineItem = (updated: TimelineItem) => {
@@ -984,10 +983,18 @@ function App() {
   const exportLabel = exportSize ? `${exportSize.width}×${exportSize.height} (${aspectRatio}) · 30 fps` : ''
 
   return (
-    <div className="app">
+    <div
+      className="app"
+      style={
+        {
+          '--side-panel-width': `${sidePanelWidth}px`,
+          '--timeline-height': `${timelineHeight}px`,
+        } as React.CSSProperties
+      }
+    >
       <header className="app-header">
         <div className="app-brand">
-          <div className="brand-logo-box" title="Mini Video Editor Studio">
+          <div className="brand-logo-box" title="Memento Studio">
             <svg width="20" height="20" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
               <defs>
                 <linearGradient id="brand-grad" x1="2" y1="2" x2="30" y2="30" gradientUnits="userSpaceOnUse">
@@ -1011,7 +1018,7 @@ function App() {
             </svg>
           </div>
           <div className="brand-meta">
-            <h1>Mini Video Editor</h1>
+            <h1>Memento</h1>
             <span className="brand-badge">PRO STUDIO</span>
           </div>
         </div>
@@ -1039,40 +1046,11 @@ function App() {
         </div>
 
         <div className="header-actions">
-          {/* Undo & Redo History Controls */}
-          <div className="header-history-group">
-            <button
-              type="button"
-              className="btn-header-history"
-              onClick={undo}
-              disabled={!canUndo}
-              title="Undo (Cmd+Z / Ctrl+Z)"
-              aria-label="Undo"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 7v6h6" />
-                <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
-              </svg>
-              <span>Undo</span>
-            </button>
-            <button
-              type="button"
-              className="btn-header-history"
-              onClick={redo}
-              disabled={!canRedo}
-              title="Redo (Cmd+Shift+Z / Ctrl+Y)"
-              aria-label="Redo"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 7v6h-6" />
-                <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
-              </svg>
-              <span>Redo</span>
-            </button>
-          </div>
-
           {/* Project Aspect Ratio Selector */}
-          <div className="header-aspect-ratio-group" title="Project Canvas Aspect Ratio">
+          <div
+            className="header-aspect-ratio-group"
+            title="Project canvas aspect ratio"
+          >
             <span className="aspect-ratio-icon" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2" /></svg></span>
             <select
               className="aspect-ratio-select"
@@ -1088,24 +1066,88 @@ function App() {
             </select>
           </div>
 
-          <button
-            type="button"
-            className="header-shortcuts-btn"
-            onClick={() => setShortcutsOpen(true)}
-            title="Keyboard shortcuts & gestures (?)"
-            aria-label="Keyboard shortcuts"
-          >
-            ⌨ Shortcuts
-          </button>
-          <button
-            type="button"
-            className="btn-header-new"
-            onClick={() => setConfirmNewOpen(true)}
-            disabled={clips.length === 0 && items.length === 0 && audioClips.length === 0 && audioItems.length === 0}
-            title="Clear current timeline and start a new project"
-          >
-            New Project
-          </button>
+          <div className="header-menu-wrap">
+            <button
+              ref={headerMenuAnchor}
+              type="button"
+              className="header-menu-btn"
+              onClick={() => setHeaderMenuOpen((prev) => !prev)}
+              aria-haspopup="menu"
+              aria-expanded={headerMenuOpen}
+              title="Project menu"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <line x1="4" y1="7" x2="20" y2="7" />
+                <line x1="4" y1="12" x2="20" y2="12" />
+                <line x1="4" y1="17" x2="20" y2="17" />
+              </svg>
+              <span>Menu</span>
+            </button>
+
+            <Popover
+              anchorRef={headerMenuAnchor}
+              open={headerMenuOpen}
+              onClose={() => setHeaderMenuOpen(false)}
+              width={232}
+            >
+              <div className="header-menu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={items.length === 0}
+                  onClick={() => {
+                    setHeaderMenuOpen(false)
+                    exporter.reset()
+                    setExportOpen(true)
+                  }}
+                >
+                  <span>Export video</span>
+                  <small>Render timeline as MP4</small>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={
+                    clips.length === 0 &&
+                    items.length === 0 &&
+                    audioClips.length === 0 &&
+                    audioItems.length === 0
+                  }
+                  onClick={() => {
+                    setHeaderMenuOpen(false)
+                    setConfirmNewOpen(true)
+                  }}
+                >
+                  <span>New project</span>
+                  <small>Clear the timeline and start over</small>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setHeaderMenuOpen(false)
+                    setShortcutsOpen(true)
+                  }}
+                >
+                  <span>Keyboard shortcuts</span>
+                  <small>Every key and gesture</small>
+                </button>
+                <div className="header-menu-divider" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setHeaderMenuOpen(false)
+                    setAboutOpen(true)
+                  }}
+                >
+                  <span>About Memento</span>
+                  <small>Who made this, and how</small>
+                </button>
+              </div>
+            </Popover>
+          </div>
+
           <button
             type="button"
             className="export-button"
@@ -1125,43 +1167,55 @@ function App() {
           </button>
         </div>
       </header>
-      <SideRail active={sidePanel} onSelect={setSidePanel} />
+      <Splitter
+        orientation="vertical"
+        size={sidePanelWidth}
+        min={220}
+        max={560}
+        direction={1}
+        label="Resize side panel"
+        onResize={(next) => {
+          setSidePanelWidth(next)
+          storeSize('mve.sidePanelWidth', next)
+        }}
+        onReset={() => {
+          setSidePanelWidth(DEFAULT_SIDE_PANEL_WIDTH)
+          storeSize('mve.sidePanelWidth', DEFAULT_SIDE_PANEL_WIDTH)
+        }}
+      />
 
-      {sidePanel === 'media' && (
-        <MediaBin
-          clips={clips}
-          audioClips={audioClips}
-          selection={showingClip ? selection : null}
-          importing={importing}
-          errors={errors}
-          onImport={importFiles}
-          onSelectVideo={selectVideoClip}
-          onSelectAudio={selectAudioClip}
-          onRemoveVideo={removeClip}
-          onRemoveAudio={removeAudioClip}
-          onAddVideoToTimeline={(clipId) => addToTimeline(clipId)}
-          onAddAudioToTimeline={(clipId) => addAudioToTimeline(clipId)}
-        />
-      )}
+      <Splitter
+        orientation="horizontal"
+        size={timelineHeight}
+        min={180}
+        max={Math.max(240, window.innerHeight - 260)}
+        direction={-1}
+        label="Resize timeline"
+        onResize={(next) => {
+          setTimelineHeight(next)
+          storeSize('mve.timelineHeight', next)
+        }}
+        onReset={() => {
+          setTimelineHeight(DEFAULT_TIMELINE_HEIGHT)
+          storeSize('mve.timelineHeight', DEFAULT_TIMELINE_HEIGHT)
+        }}
+      />
 
-      {sidePanel === 'effects' && (
-        <EffectsPanel
-          selectedClipFilter={selectedClipForEffects?.filter ?? null}
-          selectedAudioEffect={selectedAudioItem?.effect ?? null}
-          onApplyFilter={applyFilterToSelection}
-          onApplyAudioEffect={applyAudioEffectToSelection}
-        />
-      )}
+      <MediaBin
+        clips={clips}
+        audioClips={audioClips}
+        selection={showingClip ? selection : null}
+        importing={importing}
+        errors={errors}
+        onImport={importFiles}
+        onSelectVideo={selectVideoClip}
+        onSelectAudio={selectAudioClip}
+        onRemoveVideo={removeClip}
+        onRemoveAudio={removeAudioClip}
+        onAddVideoToTimeline={(clipId) => addToTimeline(clipId)}
+        onAddAudioToTimeline={(clipId) => addAudioToTimeline(clipId)}
+      />
 
-      {sidePanel === 'transitions' && (
-        <TransitionsPanel
-          selectedType={selectedTransition?.type ?? null}
-          canApply={selectedTransition !== null}
-          onApply={(type) => {
-            if (selectedTransition !== null) updateTransition({ ...selectedTransition, type })
-          }}
-        />
-      )}
       <Preview
         selection={showingClip ? selection : null}
         videoClips={clipsById}
@@ -1175,6 +1229,7 @@ function App() {
         timelineVideoRef={timelineVideoRef}
         timelineAudioRef={timelineAudioRef}
         timelineVeilRef={timelineVeilRef}
+        masterGrade={masterGrade}
         textItems={textItems}
         selectedTextId={validSelectedTextId}
         time={player.time}
@@ -1295,7 +1350,6 @@ function App() {
         onAddAudioClip={addAudioToTimeline}
         onMoveAudioItem={moveAudio}
         onTrimAudioItem={trimAudio}
-        onAudioVolumeChange={setAudioVolume}
         onAddAudioTrack={addAudioTrack}
         onRemoveAudioTrack={removeAudioTrack}
         textItems={textItems}
@@ -1317,8 +1371,12 @@ function App() {
         onMoveOverlayItem={moveOverlay}
         onTrimOverlayItem={trimOverlay}
         onAddMediaOverlay={addMediaOverlay}
-        onApplyFilterToItem={applyFilterToItem}
-        onApplyAudioEffectToItem={applyAudioEffectToItem}
+        masterGrade={masterGrade}
+        onUpdateMasterGrade={setMasterGrade}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={undo}
+        onRedo={redo}
         videoLayers={videoLayers}
         videoLayerCount={videoLayerCount}
         selectedLayerItemId={validSelectedLayerItemId}
@@ -1331,6 +1389,8 @@ function App() {
         edgeFades={edgeFades}
         onUpdateEdgeFades={setEdgeFades}
       />
+      {aboutOpen && <AboutModal onClose={() => setAboutOpen(false)} />}
+
       {exportOpen && (
         <ExportDialog
           state={exporter.state}

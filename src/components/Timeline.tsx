@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DragEvent, PointerEvent, RefObject } from 'react'
 import { AudioLane } from './AudioLane.tsx'
+import { Popover } from './Popover.tsx'
+import { GradeControls } from './GradeControls.tsx'
+import { Slider } from './Slider.tsx'
 import { OverlayLane } from './OverlayLane.tsx'
 import { VideoLayerLane } from './VideoLayerLane.tsx'
 import { TextLane } from './TextLane.tsx'
-import { AUDIO_DRAG_TYPE, CLIP_DRAG_TYPE, FILTER_DRAG_TYPE } from '../dnd.ts'
+import { AUDIO_DRAG_TYPE, CLIP_DRAG_TYPE } from '../dnd.ts'
 import { formatDuration, formatTimecode } from '../format.ts'
 import {
   clamp,
@@ -22,19 +25,44 @@ import type {
   AudioClip,
   AudioTimelineItem,
   EdgeFades,
+  MasterGrade,
   MediaClip,
   OverlayItem,
+  OverlayCategory,
   TextOverlay,
   TimelineItem,
   Transition,
   TransitionEasing,
   TransitionType,
   VideoLayerItem,
-  FilterType,
-  AudioEffectType,
 } from '../types.ts'
 
 /** Ruler label spacing candidates, in seconds; the first that leaves room for a label wins. */
+/**
+ * Everything the toolbar can add, behind one menu. These were seven separate
+ * buttons competing for the same row; grouping them keeps the common actions
+ * (split, delete) prominent and the rest one click away.
+ */
+const ADD_ACTIONS: readonly {
+  id: 'title' | 'layer' | 'audio' | OverlayCategory
+  mark: string
+  label: string
+  hint: string
+  /** Needs something on the timeline to attach to; empty tracks do not. */
+  needsMedia: boolean
+}[] = [
+  { id: 'title', mark: 'T', label: 'Title', hint: 'Text over the picture', needsMedia: true },
+  { id: 'media', mark: 'PIP', label: 'Picture-in-Picture', hint: 'Logo, watermark, or video', needsMedia: true },
+  { id: 'vfx', mark: 'FX', label: 'Cinematic Atmosphere', hint: 'Letterbox, vignette, grain, light leak', needsMedia: true },
+  { id: 'lower-third', mark: 'L3', label: 'Lower Third', hint: 'Speaker name, title, breaking ribbon', needsMedia: true },
+  { id: 'color', mark: 'COL', label: 'Colour Wash', hint: 'Warm sunset, neon blend tint', needsMedia: true },
+  { id: 'layer', mark: 'V+', label: 'Video Layer', hint: 'Another track above V1', needsMedia: false },
+  { id: 'audio', mark: 'A+', label: 'Audio Track', hint: 'Another parallel audio lane', needsMedia: false },
+]
+
+/** Times closer together than this count as the same cut. */
+const EDIT_POINT_EPSILON = 1e-3
+
 const TICK_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
 const MIN_TICK_SPACING = 70
 /** Seconds of empty track shown after the last item. */
@@ -73,7 +101,6 @@ interface TimelineProps {
   onAddAudioClip: (clipId: string, desiredStart?: number, trackIndex?: number) => void
   onMoveAudioItem: (id: string, start: number) => void
   onTrimAudioItem: (id: string, edge: 'in' | 'out', sourceTime: number) => void
-  onAudioVolumeChange: (id: string, volume: number) => void
   onAddAudioTrack?: () => void
   onRemoveAudioTrack?: (trackIndex: number) => void
   textItems: TextOverlay[]
@@ -82,8 +109,6 @@ interface TimelineProps {
   onAddText: () => void
   onMoveTextItem: (id: string, start: number) => void
   onTrimTextItem: (id: string, edge: 'in' | 'out', time: number) => void
-  onApplyFilterToItem?: (itemId: string, filter: FilterType) => void
-  onApplyAudioEffectToItem?: (itemId: string, effect: AudioEffectType) => void
   videoLayers?: VideoLayerItem[]
   videoLayerCount?: number
   selectedLayerItemId?: string | null
@@ -102,6 +127,12 @@ interface TimelineProps {
   onAddMediaOverlay?: (clipId: string, start: number) => void
   edgeFades?: EdgeFades
   onUpdateEdgeFades?: (updated: EdgeFades) => void
+  masterGrade?: MasterGrade
+  onUpdateMasterGrade?: (updated: MasterGrade) => void
+  canUndo?: boolean
+  canRedo?: boolean
+  onUndo?: () => void
+  onRedo?: () => void
 }
 
 interface Reorder {
@@ -141,7 +172,6 @@ export function Timeline({
   onAddAudioClip,
   onMoveAudioItem,
   onTrimAudioItem,
-  onAudioVolumeChange,
   onAddAudioTrack,
   onRemoveAudioTrack,
   textItems,
@@ -150,8 +180,6 @@ export function Timeline({
   onAddText,
   onMoveTextItem,
   onTrimTextItem,
-  onApplyFilterToItem,
-  onApplyAudioEffectToItem,
   videoLayers = [],
   videoLayerCount = 1,
   selectedLayerItemId = null,
@@ -170,23 +198,34 @@ export function Timeline({
   onAddMediaOverlay,
   edgeFades,
   onUpdateEdgeFades,
+  masterGrade = {},
+  onUpdateMasterGrade,
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
 }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const viewportWidth = useElementWidth(scrollRef)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [reorder, setReorder] = useState<Reorder | null>(null)
-  const [filterDropId, setFilterDropId] = useState<string | null>(null)
-  const [isAddTrackDragOver, setIsAddTrackDragOver] = useState(false)
-  const [showOverlayMenu, setShowOverlayMenu] = useState(false)
+  const [showAddMenu, setShowAddMenu] = useState(false)
   const [showEdgeFadesMenu, setShowEdgeFadesMenu] = useState(false)
+  const addMenuAnchor = useRef<HTMLButtonElement>(null)
+  const edgeFadesAnchor = useRef<HTMLButtonElement>(null)
+  const masterGradeAnchor = useRef<HTMLButtonElement>(null)
+  const [showMasterGrade, setShowMasterGrade] = useState(false)
 
   const maxTrackInItems = audioItems.reduce((max, item) => Math.max(max, item.trackIndex ?? 0), 0)
   const trackCount = Math.max(audioTrackCount, maxTrackInItems + 1, 1)
 
   const starts = itemStarts(items)
   const contentWidth = Math.max(viewportWidth, (duration + TRAILING_SPACE) * pps)
-  const playheadX = time * pps
+  /** Reserved column for track badges; must match --track-gutter in the stylesheet. */
+  const TRACK_GUTTER = 54
+  /** Playhead position in scroll coordinates, i.e. including the badge gutter. */
+  const playheadX = TRACK_GUTTER + time * pps
 
   const isProgrammaticScroll = useRef(false)
   const userScrolledAway = useRef(false)
@@ -216,9 +255,14 @@ export function Timeline({
 
   // Detect user horizontal scrolling to suspend or resume auto-following.
   const handleScroll = () => {
-    if (isProgrammaticScroll.current) return
     const scroller = scrollRef.current
     if (!scroller) return
+
+    // Track badges live in a gutter inside the scrolling content, so counter
+    // translate them to keep the column pinned while the lanes scroll under it.
+    scroller.style.setProperty('--timeline-scroll-x', `${scroller.scrollLeft}px`)
+
+    if (isProgrammaticScroll.current) return
 
     const visibleStart = scroller.scrollLeft
     const visibleEnd = scroller.scrollLeft + scroller.clientWidth
@@ -359,6 +403,13 @@ export function Timeline({
     element.addEventListener('pointercancel', finish)
   }
 
+  // Every cut the playhead can land on: the head, each clip boundary, the tail.
+  const editPoints = [...new Set([0, ...starts, duration])].sort((a, b) => a - b)
+  const previousEditPoint =
+    [...editPoints].reverse().find((point) => point < time - EDIT_POINT_EPSILON) ?? 0
+  const nextEditPoint =
+    editPoints.find((point) => point > time + EDIT_POINT_EPSILON) ?? duration
+
   const markerTime =
     reorder !== null
       ? reorderMarkerTime(items, items.findIndex((item) => item.id === reorder.id), reorder.to)
@@ -369,39 +420,85 @@ export function Timeline({
   return (
     <section className="panel timeline" aria-label="Timeline">
       <header className="panel-header timeline-toolbar">
-        <div className="timeline-title-area">
-          <h2>Timeline</h2>
-        </div>
-
         {/* Transport Controls */}
         <div className="transport-controls">
-          <button
-            type="button"
-            className="transport-btn jump-btn"
-            onClick={() => {
-              userScrolledAway.current = false
-              onSeek(0)
-            }}
-            disabled={duration <= 0}
-            title="Jump to Start (Home)"
-          >
-            ⏮
-          </button>
+          <div className="timecode-display" aria-label="Playhead time">
+            <span className="tc-current">{formatTimecode(time)}</span>
+            <span className="tc-divider">/</span>
+            <span className="tc-total">{formatTimecode(duration)}</span>
+          </div>
           <button
             type="button"
             className={`transport-btn play-btn${playing ? ' is-playing' : ''}`}
             onClick={onTogglePlay}
             disabled={duration <= 0}
             title={`${playing ? 'Pause' : 'Play'} (Space)`}
+            aria-label={playing ? 'Pause' : 'Play'}
           >
             <span className="play-icon">{playing ? '❚❚' : '▶'}</span>
-            <span className="play-text">{playing ? 'Pause' : 'Play'}</span>
           </button>
-          <div className="timecode-display" aria-label="Playhead time">
-            <span className="tc-current">{formatTimecode(time)}</span>
-            <span className="tc-divider">/</span>
-            <span className="tc-total">{formatTimecode(duration)}</span>
-          </div>
+          <button
+            type="button"
+            className="transport-btn step-btn"
+            onClick={() => {
+              userScrolledAway.current = false
+              onSeek(previousEditPoint)
+            }}
+            disabled={duration <= 0 || previousEditPoint >= time - EDIT_POINT_EPSILON}
+            title="Back to the previous cut"
+            aria-label="Previous cut"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M18 5v14l-10-7z" />
+              <rect x="5" y="5" width="2" height="14" rx="1" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="transport-btn step-btn"
+            onClick={() => {
+              userScrolledAway.current = false
+              onSeek(nextEditPoint)
+            }}
+            disabled={duration <= 0 || nextEditPoint <= time + EDIT_POINT_EPSILON}
+            title="Forward to the next cut"
+            aria-label="Next cut"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M6 5v14l10-7z" />
+              <rect x="17" y="5" width="2" height="14" rx="1" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Undo / Redo — editing actions, so they sit with the edit tools */}
+        <div className="timeline-history-group">
+          <button
+            type="button"
+            className="tool-btn history-btn icon-only"
+            onClick={() => onUndo?.()}
+            disabled={!canUndo}
+            title="Undo (Cmd+Z / Ctrl+Z)"
+            aria-label="Undo"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 7v6h6" />
+              <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            className="tool-btn history-btn icon-only"
+            onClick={() => onRedo?.()}
+            disabled={!canRedo}
+            title="Redo (Cmd+Shift+Z / Ctrl+Y)"
+            aria-label="Redo"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 7v6h-6" />
+              <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
+            </svg>
+          </button>
         </div>
 
         {/* Editing Tools */}
@@ -417,83 +514,55 @@ export function Timeline({
             <span>Split</span>
             <kbd className="key-shortcut">S</kbd>
           </button>
-          <button
-            type="button"
-            className="tool-btn add-title-btn"
-            onClick={onAddText}
-            disabled={duration <= 0}
-            title="Add a text title overlay at the playhead"
-          >
-            <span className="tool-icon">T</span>
-            <span>+ Title</span>
-          </button>
           <div className="overlay-dropdown-wrap">
             <button
               type="button"
-              className="tool-btn add-overlay-btn"
-              onClick={() => setShowOverlayMenu((prev) => !prev)}
-              disabled={duration <= 0}
-              title="Add a rich overlay (Picture-in-Picture, Visual FX, Lower Third, or Color Tint)"
+              ref={addMenuAnchor}
+              className="tool-btn add-menu-btn"
+              onClick={() => setShowAddMenu((prev) => !prev)}
+              aria-haspopup="menu"
+              aria-expanded={showAddMenu}
+              title="Add a title, overlay, video layer or audio track"
             >
-              <span className="tool-icon">⧉</span>
-              <span>+ Overlay ▾</span>
+              <span className="tool-icon">+</span>
+              <span>Add</span>
+              <span className="tool-caret" aria-hidden="true">▾</span>
             </button>
-            {showOverlayMenu && (
-              <div className="overlay-menu-dropdown">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowOverlayMenu(false)
-                    onAddOverlay?.('media')
-                  }}
-                >
-                  <span className="overlay-menu-icon">PIP</span>
-                  <div className="overlay-menu-text">
-                    <strong>Picture-in-Picture</strong>
-                    <small>Logo, watermark, or video</small>
-                  </div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowOverlayMenu(false)
-                    onAddOverlay?.('vfx')
-                  }}
-                >
-                  <span className="overlay-menu-icon">FX</span>
-                  <div className="overlay-menu-text">
-                    <strong>Cinematic Atmosphere FX</strong>
-                    <small>Letterbox, vignette, grain, light leak</small>
-                  </div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowOverlayMenu(false)
-                    onAddOverlay?.('lower-third')
-                  }}
-                >
-                  <span className="overlay-menu-icon">L3</span>
-                  <div className="overlay-menu-text">
-                    <strong>Broadcast Lower Third</strong>
-                    <small>Speaker name, title, breaking ribbon</small>
-                  </div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowOverlayMenu(false)
-                    onAddOverlay?.('color')
-                  }}
-                >
-                  <span className="overlay-menu-icon">COL</span>
-                  <div className="overlay-menu-text">
-                    <strong>Color Gradient Wash</strong>
-                    <small>Warm sunset, neon blend tint</small>
-                  </div>
-                </button>
+            <Popover
+              anchorRef={addMenuAnchor}
+              open={showAddMenu}
+              onClose={() => setShowAddMenu(false)}
+              width={272}
+            >
+              <div className="overlay-menu-dropdown is-portalled" role="menu">
+                {ADD_ACTIONS.map((action) => (
+                  <button
+                    key={action.id}
+                    type="button"
+                    role="menuitem"
+                    disabled={action.needsMedia && duration <= 0}
+                    title={
+                      action.needsMedia && duration <= 0
+                        ? 'Add a clip to the timeline first'
+                        : action.hint
+                    }
+                    onClick={() => {
+                      setShowAddMenu(false)
+                      if (action.id === 'title') onAddText()
+                      else if (action.id === 'layer') onAddVideoLayer?.()
+                      else if (action.id === 'audio') onAddAudioTrack?.()
+                      else onAddOverlay?.(action.id)
+                    }}
+                  >
+                    <span className="overlay-menu-icon">{action.mark}</span>
+                    <div className="overlay-menu-text">
+                      <strong>{action.label}</strong>
+                      <small>{action.hint}</small>
+                    </div>
+                  </button>
+                ))}
               </div>
-            )}
+            </Popover>
           </div>
 
           {/* Edge Fades Tool & Popover */}
@@ -501,6 +570,7 @@ export function Timeline({
             <button
               type="button"
               className={`tool-btn edge-fades-btn${(edgeFades?.in?.duration || edgeFades?.out?.duration) ? ' active' : ''}`}
+              ref={edgeFadesAnchor}
               onClick={() => setShowEdgeFadesMenu((prev) => !prev)}
               disabled={duration <= 0}
               title="Configure Fade-in-from-black and Fade-out-to-black at timeline edges"
@@ -508,8 +578,13 @@ export function Timeline({
               <span className="tool-icon">◐</span>
               <span>Edge Fades</span>
             </button>
-            {showEdgeFadesMenu && (
-              <div className="overlay-menu-dropdown edge-fades-dropdown" style={{ width: '280px', padding: '12px' }}>
+            <Popover
+              anchorRef={edgeFadesAnchor}
+              open={showEdgeFadesMenu}
+              onClose={() => setShowEdgeFadesMenu(false)}
+              width={280}
+            >
+              <div className="overlay-menu-dropdown edge-fades-dropdown is-portalled" style={{ padding: '12px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   <strong style={{ fontSize: '13px' }}>Timeline Edge Fades</strong>
                   <button
@@ -546,22 +621,33 @@ export function Timeline({
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <span style={{ fontSize: '11px', width: '50px', color: 'var(--text-muted)' }}>Duration</span>
-                        <input
-                          type="range"
-                          className="inspector-slider"
+                        <Slider
                           min={0.2}
                           max={3.0}
                           step={0.1}
                           value={edgeFades.in.duration}
-                          onChange={(e) => {
-                            const durationVal = parseFloat(e.target.value)
+                          defaultValue={1.0}
+                          onChange={(durationVal) => {
                             onUpdateEdgeFades?.({
                               ...edgeFades,
                               in: { ...edgeFades.in!, duration: durationVal },
                             })
                           }}
+                          ariaLabel="Fade in duration"
                         />
-                        <span style={{ fontSize: '11px', width: '32px' }}>{edgeFades.in.duration.toFixed(1)}s</span>
+                        <span
+                          className="control-subvalue"
+                          style={{ width: '38px', textAlign: 'center' }}
+                          onDoubleClick={() => {
+                            onUpdateEdgeFades?.({
+                              ...edgeFades,
+                              in: { ...edgeFades.in!, duration: 1.0 },
+                            })
+                          }}
+                          title="Double-click to reset"
+                        >
+                          {edgeFades.in.duration.toFixed(1)}s
+                        </span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <span style={{ fontSize: '11px', width: '50px', color: 'var(--text-muted)' }}>Color</span>
@@ -625,22 +711,33 @@ export function Timeline({
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <span style={{ fontSize: '11px', width: '50px', color: 'var(--text-muted)' }}>Duration</span>
-                        <input
-                          type="range"
-                          className="inspector-slider"
+                        <Slider
                           min={0.2}
                           max={3.0}
                           step={0.1}
                           value={edgeFades.out.duration}
-                          onChange={(e) => {
-                            const durationVal = parseFloat(e.target.value)
+                          defaultValue={1.0}
+                          onChange={(durationVal) => {
                             onUpdateEdgeFades?.({
                               ...edgeFades,
                               out: { ...edgeFades.out!, duration: durationVal },
                             })
                           }}
+                          ariaLabel="Fade out duration"
                         />
-                        <span style={{ fontSize: '11px', width: '32px' }}>{edgeFades.out.duration.toFixed(1)}s</span>
+                        <span
+                          className="control-subvalue"
+                          style={{ width: '38px', textAlign: 'center' }}
+                          onDoubleClick={() => {
+                            onUpdateEdgeFades?.({
+                              ...edgeFades,
+                              out: { ...edgeFades.out!, duration: 1.0 },
+                            })
+                          }}
+                          title="Double-click to reset"
+                        >
+                          {edgeFades.out.duration.toFixed(1)}s
+                        </span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <span style={{ fontSize: '11px', width: '50px', color: 'var(--text-muted)' }}>Color</span>
@@ -679,26 +776,49 @@ export function Timeline({
                   )}
                 </div>
               </div>
-            )}
+            </Popover>
           </div>
-          <button
-            type="button"
-            className="tool-btn add-video-layer-btn"
-            onClick={() => onAddVideoLayer?.()}
-            title="Add another video layer above V1"
-          >
-            <span className="tool-icon">▣</span>
-            <span>+ Video Layer</span>
-          </button>
-          <button
-            type="button"
-            className="tool-btn add-audio-track-btn"
-            onClick={() => onAddAudioTrack?.()}
-            title="Add another parallel audio track"
-          >
-            <span className="tool-icon">♪</span>
-            <span>+ Audio Track</span>
-          </button>
+          <div className="overlay-dropdown-wrap">
+            <button
+              ref={masterGradeAnchor}
+              type="button"
+              className="tool-btn master-grade-btn"
+              onClick={() => setShowMasterGrade((prev) => !prev)}
+              title="Grade the whole timeline at once, on top of any per-clip looks"
+            >
+              <span className="tool-icon">◑</span>
+              <span>Colour</span>
+            </button>
+            <Popover
+              anchorRef={masterGradeAnchor}
+              open={showMasterGrade}
+              onClose={() => setShowMasterGrade(false)}
+              width={300}
+            >
+              <div className="overlay-menu-dropdown is-portalled master-grade-panel">
+                <div className="master-grade-head">
+                  <strong>Whole Timeline</strong>
+                  <button
+                    type="button"
+                    className="inspector-close-btn"
+                    onClick={() => setShowMasterGrade(false)}
+                    aria-label="Close"
+                  >
+                    ×
+                  </button>
+                </div>
+                <p className="library-hint">
+                  Applies to every clip, on top of each clip&rsquo;s own look. Titles and overlays
+                  stay ungraded.
+                </p>
+                <GradeControls
+                  grade={masterGrade}
+                  onChange={(next) => onUpdateMasterGrade?.(next)}
+                />
+              </div>
+            </Popover>
+          </div>
+
           <button
             type="button"
             className="tool-btn delete-tool-btn"
@@ -720,17 +840,35 @@ export function Timeline({
 
         {/* Zoom Slider */}
         <div className="zoom-controls">
-          <span className="zoom-icon" title="Zoom out">−</span>
-          <input
-            type="range"
-            className="zoom-slider"
-            min={10}
-            max={200}
-            value={pps}
-            onChange={(event) => onZoom(Number(event.target.value))}
-            title={`Zoom level: ${pps} px/sec`}
-          />
-          <span className="zoom-icon" title="Zoom in">+</span>
+          <button
+            type="button"
+            className="zoom-icon-btn"
+            title="Zoom out"
+            onClick={() => onZoom(Math.max(10, pps - 15))}
+          >
+            −
+          </button>
+          <div style={{ width: '100px' }}>
+            <Slider
+              min={10}
+              max={200}
+              step={5}
+              value={pps}
+              defaultValue={50}
+              className="zoom-slider"
+              onChange={onZoom}
+              title={`Zoom: ${pps} px/s (Double-click to reset)`}
+              ariaLabel="Timeline zoom level"
+            />
+          </div>
+          <button
+            type="button"
+            className="zoom-icon-btn"
+            title="Zoom in"
+            onClick={() => onZoom(Math.min(200, pps + 15))}
+          >
+            +
+          </button>
         </div>
       </header>
 
@@ -753,28 +891,6 @@ export function Timeline({
               if (event.currentTarget.hasPointerCapture(event.pointerId)) seekFromPointer(event)
             }}
           />
-          <TextLane
-            items={textItems}
-            selectedItemId={selectedTextId}
-            pixelsPerSecond={pps}
-            maxEnd={duration}
-            onSelectItem={onSelectTextItem}
-            onMoveItem={onMoveTextItem}
-            onTrimItem={onTrimTextItem}
-          />
-          {overlayItems && onSelectOverlayItem && onMoveOverlayItem && onTrimOverlayItem && (
-            <OverlayLane
-              items={overlayItems}
-              mediaClips={clips}
-              selectedItemId={selectedOverlayId}
-              pixelsPerSecond={pps}
-              maxEnd={duration}
-              onSelectItem={onSelectOverlayItem}
-              onMoveItem={onMoveOverlayItem}
-              onTrimItem={onTrimOverlayItem}
-              onAddMediaOverlay={onAddMediaOverlay}
-            />
-          )}
           {onSelectLayerItem &&
             onAddClipToLayer &&
             onMoveLayerItem &&
@@ -793,7 +909,7 @@ export function Timeline({
                   onMoveItem={onMoveLayerItem}
                   onTrimItem={onTrimLayerItem}
                   onAddClip={onAddClipToLayer}
-                  onRemoveLane={trackIndex > 0 ? onRemoveVideoLayer : undefined}
+                  onRemoveLane={onRemoveVideoLayer}
                 />
               ),
             )}
@@ -825,7 +941,7 @@ export function Timeline({
               return (
                 <div
                   key={item.id}
-                  className={`timeline-item${item.id === selectedItemId ? ' selected' : ''}${dragging ? ' dragging' : ''}${filterDropId === item.id ? ' effect-drop' : ''}`}
+                  className={`timeline-item${item.id === selectedItemId ? ' selected' : ''}${dragging ? ' dragging' : ''}`}
                   style={{
                     left: starts[index] * pps,
                     width: itemLength(item) * pps,
@@ -834,22 +950,6 @@ export function Timeline({
                   }}
                   title={`${clip?.name ?? 'Missing clip'} · ${formatDuration(itemLength(item))}`}
                   onPointerDown={(event) => beginItemDrag(event, index)}
-                  onDragOver={(event) => {
-                    if (!event.dataTransfer.types.includes(FILTER_DRAG_TYPE)) return
-                    event.preventDefault()
-                    event.stopPropagation()
-                    event.dataTransfer.dropEffect = 'copy'
-                    setFilterDropId(item.id)
-                  }}
-                  onDragLeave={() => setFilterDropId(null)}
-                  onDrop={(event) => {
-                    setFilterDropId(null)
-                    if (!event.dataTransfer.types.includes(FILTER_DRAG_TYPE)) return
-                    event.preventDefault()
-                    event.stopPropagation()
-                    const filter = event.dataTransfer.getData(FILTER_DRAG_TYPE)
-                    if (filter) onApplyFilterToItem?.(item.id, filter as FilterType)
-                  }}
                 >
                   <span className="item-label">
                     
@@ -947,39 +1047,30 @@ export function Timeline({
               onAddClip={(clipId, start) => onAddAudioClip(clipId, start, tIndex)}
               onMoveItem={onMoveAudioItem}
               onTrimItem={onTrimAudioItem}
-              onApplyEffect={onApplyAudioEffectToItem}
-              onVolumeChange={onAudioVolumeChange}
             />
           ))}
-          <div
-            className={`add-track-lane${isAddTrackDragOver ? ' drag-over' : ''}`}
-            onDragOver={(e) => {
-              if (e.dataTransfer.types.includes(AUDIO_DRAG_TYPE)) {
-                e.preventDefault()
-                e.stopPropagation()
-                e.dataTransfer.dropEffect = 'copy'
-                setIsAddTrackDragOver(true)
-              }
-            }}
-            onDragLeave={() => setIsAddTrackDragOver(false)}
-            onDrop={(e) => {
-              setIsAddTrackDragOver(false)
-              if (e.dataTransfer.types.includes(AUDIO_DRAG_TYPE)) {
-                e.preventDefault()
-                e.stopPropagation()
-                const clipId = e.dataTransfer.getData(AUDIO_DRAG_TYPE)
-                if (clipId) {
-                  const rawTime = Math.max(0, trackTime(e.clientX))
-                  const snappedTime = rawTime < 1.5 ? 0 : rawTime
-                  onAddAudioClip(clipId, snappedTime, trackCount)
-                }
-              }
-            }}
-            onClick={() => onAddAudioTrack?.()}
-            title="Click or drop audio here to add a new audio track"
-          >
-            <span>+ Drop audio here or click to add track</span>
-          </div>
+          <TextLane
+            items={textItems}
+            selectedItemId={selectedTextId}
+            pixelsPerSecond={pps}
+            maxEnd={duration}
+            onSelectItem={onSelectTextItem}
+            onMoveItem={onMoveTextItem}
+            onTrimItem={onTrimTextItem}
+          />
+          {overlayItems && onSelectOverlayItem && onMoveOverlayItem && onTrimOverlayItem && (
+            <OverlayLane
+              items={overlayItems}
+              mediaClips={clips}
+              selectedItemId={selectedOverlayId}
+              pixelsPerSecond={pps}
+              maxEnd={duration}
+              onSelectItem={onSelectOverlayItem}
+              onMoveItem={onMoveOverlayItem}
+              onTrimItem={onTrimOverlayItem}
+              onAddMediaOverlay={onAddMediaOverlay}
+            />
+          )}
           <div className="playhead" style={{ left: playheadX }}>
             <div className="playhead-head" />
           </div>

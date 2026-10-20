@@ -27,7 +27,7 @@ import type { EvaluatedTransform } from '../transform.ts'
 import { edgeFadeAt, getEffectiveTransitionDuration, locateTransition, transitionAudioGains, transitionLayerAlpha, transitionVeilAt, wipeDirection, wipeEdge } from '../transitionTimeline.ts'
 import type { WipeDirection } from '../transitionTimeline.ts'
 import { activeLayersAt, layerSourceTime, videoLayerEnd, videoLayersDuration } from '../videoLayers.ts'
-import type { AspectRatio, AudioClip, AudioEffectType, AudioTimelineItem, EdgeFades, Keyframe, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from '../types.ts'
+import type { MasterGrade, AspectRatio, AudioClip, AudioEffectType, AudioTimelineItem, EdgeFades, Keyframe, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from '../types.ts'
 import { outputSizeForAspectRatio, planFrames } from './plan.ts'
 import type { Size } from './plan.ts'
 
@@ -67,6 +67,7 @@ export interface ExportOptions {
   onProgress?: (stage: string, fraction: number) => void
   /** Fades at each end of the whole timeline. */
   edgeFades?: EdgeFades
+  masterGrade?: MasterGrade
 }
 
 interface OpenVideoClip {
@@ -100,7 +101,7 @@ export async function exportTimeline(
   aspectRatio: AspectRatio = '16:9',
   overlayItems: readonly OverlayItem[] = [],
   videoLayers: readonly VideoLayerItem[] = [],
-  { signal, onProgress, edgeFades }: ExportOptions = {},
+  { signal, onProgress, edgeFades, masterGrade }: ExportOptions = {},
 ): Promise<ExportResult> {
   if (items.length === 0) throw new Error('Add clips to the timeline before exporting.')
   const firstClip = clips.get(items[0].clipId)
@@ -228,8 +229,20 @@ export async function exportTimeline(
     }
     const overlayIterators = openOverlayIterators(overlayItems, opened, plan.frameCount)
 
+    // One grade for the whole programme, composed on top of each clip's own
+    // look by drawVisual. Reset before the overlays so titling stays ungraded,
+    // which is where a programme grade sits in an NLE.
+    const masterFilter = getCssFilter(masterGrade?.filter, masterGrade?.filterIntensity, masterGrade)
+    const beginGradedFrame = () => {
+      context.filter = masterFilter
+    }
+    const endGradedFrame = () => {
+      context.filter = 'none'
+    }
+
     /** Draw the overlay stack for one frame, decoding any video PiP it needs. */
     const paintOverlays = async (time: number) => {
+      endGradedFrame()
       const { frames, samples } = await nextOverlayFrames(overlayItems, time, overlayIterators)
       try {
         drawOverlays(context, overlayItems, time, size, {
@@ -254,6 +267,7 @@ export async function exportTimeline(
           for (let i = 0; i < group.sourceTimes.length; i++) {
             context.fillStyle = '#000'
             context.fillRect(0, 0, size.width, size.height)
+            beginGradedFrame()
             drawVisual(
               context,
               { kind: 'image', bitmap, width: open.clip.width ?? bitmap.width, height: open.clip.height ?? bitmap.height },
@@ -275,6 +289,7 @@ export async function exportTimeline(
           for await (const sample of new VideoSampleSink(open.video).samplesAtTimestamps(timestamps)) {
             context.fillStyle = '#000'
             context.fillRect(0, 0, size.width, size.height)
+            beginGradedFrame()
             if (sample !== null) {
               try {
                 drawVisual(
@@ -302,6 +317,7 @@ export async function exportTimeline(
       while (framesDone < plan.frameCount) {
         context.fillStyle = '#000'
         context.fillRect(0, 0, size.width, size.height)
+        beginGradedFrame()
         const frameTime = framesDone / EXPORT_FPS
         await drawVideoLayers(context, size, videoLayers, frameTime, opened, layerIterators)
         await paintOverlays(frameTime)
@@ -359,6 +375,7 @@ export async function exportTimeline(
       for (let frame = 0; frame < plan.frameCount; frame++) {
         context.fillStyle = '#000'
         context.fillRect(0, 0, size.width, size.height)
+        beginGradedFrame()
 
         const t = frame / EXPORT_FPS
         const active = locateTransition(items, transitions, t, clips)

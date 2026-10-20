@@ -14,6 +14,49 @@ export interface HistorySnapshot {
 
 const MAX_HISTORY = 40
 
+export interface HistoryStacks {
+  past: HistorySnapshot[]
+  future: HistorySnapshot[]
+}
+
+export interface HistoryStep extends HistoryStacks {
+  /** The state to apply to the editor. */
+  snapshot: HistorySnapshot
+}
+
+/**
+ * Step back one edit. Returns null when there is nothing to undo.
+ *
+ * Pure on purpose. These used to be computed inside a `setPast` updater that
+ * also called `setFuture` and applied the snapshot; React double-invokes
+ * updaters under StrictMode to surface exactly that kind of impurity, so a
+ * single undo pushed two entries onto the redo stack and needed two redos.
+ */
+export function stepBack(
+  { past, future }: HistoryStacks,
+  current: HistorySnapshot,
+): HistoryStep | null {
+  if (past.length === 0) return null
+  return {
+    snapshot: past[past.length - 1],
+    past: past.slice(0, -1),
+    future: [current, ...future],
+  }
+}
+
+/** Step forward one edit. Returns null when there is nothing to redo. */
+export function stepForward(
+  { past, future }: HistoryStacks,
+  current: HistorySnapshot,
+): HistoryStep | null {
+  if (future.length === 0) return null
+  return {
+    snapshot: future[0],
+    past: [...past, current],
+    future: future.slice(1),
+  }
+}
+
 export function useHistory(
   currentState: HistorySnapshot,
   onApplySnapshot: (snapshot: HistorySnapshot) => void,
@@ -76,41 +119,33 @@ export function useHistory(
 
   const undo = useCallback(() => {
     window.clearTimeout(debounceTimerRef.current)
-    setPast((prevPast) => {
-      if (prevPast.length === 0) return prevPast
-      const previous = prevPast[prevPast.length - 1]
-      const newPast = prevPast.slice(0, -1)
+    const step = stepBack({ past, future }, currentState)
+    if (step === null) return
 
-      isUndoingOrRedoing.current = true
-      setFuture((prevFuture) => [currentState, ...prevFuture])
-      onApplySnapshot(previous)
-      previousRef.current = previous
-      setTimeout(() => {
-        isUndoingOrRedoing.current = false
-      }, 100)
-
-      return newPast
-    })
-  }, [currentState, onApplySnapshot])
+    isUndoingOrRedoing.current = true
+    setPast(step.past)
+    setFuture(step.future)
+    onApplySnapshot(step.snapshot)
+    previousRef.current = step.snapshot
+    window.setTimeout(() => {
+      isUndoingOrRedoing.current = false
+    }, 100)
+  }, [past, future, currentState, onApplySnapshot])
 
   const redo = useCallback(() => {
     window.clearTimeout(debounceTimerRef.current)
-    setFuture((prevFuture) => {
-      if (prevFuture.length === 0) return prevFuture
-      const next = prevFuture[0]
-      const newFuture = prevFuture.slice(1)
+    const step = stepForward({ past, future }, currentState)
+    if (step === null) return
 
-      isUndoingOrRedoing.current = true
-      setPast((prevPast) => [...prevPast, currentState])
-      onApplySnapshot(next)
-      previousRef.current = next
-      setTimeout(() => {
-        isUndoingOrRedoing.current = false
-      }, 100)
-
-      return newFuture
-    })
-  }, [currentState, onApplySnapshot])
+    isUndoingOrRedoing.current = true
+    setPast(step.past)
+    setFuture(step.future)
+    onApplySnapshot(step.snapshot)
+    previousRef.current = step.snapshot
+    window.setTimeout(() => {
+      isUndoingOrRedoing.current = false
+    }, 100)
+  }, [past, future, currentState, onApplySnapshot])
 
   // Global keyboard shortcuts (Cmd+Z / Ctrl+Z for Undo, Cmd+Shift+Z / Ctrl+Y for Redo)
   useEffect(() => {

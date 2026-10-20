@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AspectRatio, AudioClip, AudioTimelineItem, EdgeFades, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from '../types.ts'
+import type { AspectRatio, AudioClip, AudioTimelineItem, EdgeFades, MasterGrade, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from '../types.ts'
 import { exportTimeline } from './exportTimeline.ts'
 import type { ExportResult } from './exportTimeline.ts'
 
@@ -23,6 +23,7 @@ export function useExporter(
   overlayItems: readonly OverlayItem[] = [],
   videoLayers: readonly VideoLayerItem[] = [],
   edgeFades?: EdgeFades,
+  masterGrade?: MasterGrade,
 ) {
   const [state, setState] = useState<ExportState>({ status: 'idle' })
   const controllerRef = useRef<AbortController | null>(null)
@@ -55,6 +56,7 @@ export function useExporter(
         {
           signal: controller.signal,
           edgeFades,
+          masterGrade,
           onProgress: (stage, fraction) => {
             if (!controller.signal.aborted) setState({ status: 'running', stage, fraction })
           },
@@ -74,7 +76,7 @@ export function useExporter(
     } finally {
       if (controllerRef.current === controller) controllerRef.current = null
     }
-  }, [items, clips, audioItems, audioClips, textItems, transitions, aspectRatio, overlayItems, videoLayers, edgeFades])
+  }, [items, clips, audioItems, audioClips, textItems, transitions, aspectRatio, overlayItems, videoLayers, edgeFades, masterGrade])
 
 
   const cancel = useCallback(() => controllerRef.current?.abort(), [])
@@ -92,5 +94,5 @@ function exportFileName(): string {
   const pad = (value: number) => String(value).padStart(2, '0')
   const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
   const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
-  return `mini-video-editor-${date}-${time}.mp4`
+  return `memento-${date}-${time}.mp4`
 }

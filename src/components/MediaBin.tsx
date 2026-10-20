@@ -219,6 +219,15 @@ export function MediaBin({
                   <div className="clip-actions">
                     <button
                       type="button"
+                      className="clip-btn remove-btn"
+                      aria-label={`Remove ${clip.name}`}
+                      title="Remove from pool"
+                      onClick={() => onRemoveVideo(clip.id)}
+                    >
+                      ×
+                    </button>
+                    <button
+                      type="button"
                       className="clip-btn add-btn"
                       aria-label={`Add ${clip.name} to timeline`}
                       title={placeable ? 'Add to Timeline (+)' : 'Duration unknown'}
@@ -226,15 +235,6 @@ export function MediaBin({
                       onClick={() => onAddVideoToTimeline(clip.id)}
                     >
                       +
-                    </button>
-                    <button
-                      type="button"
-                      className="clip-btn remove-btn"
-                      aria-label={`Remove ${clip.name}`}
-                      title="Remove from pool"
-                      onClick={() => onRemoveVideo(clip.id)}
-                    >
-                      ×
                     </button>
                   </div>
                 </li>
@@ -279,21 +279,21 @@ export function MediaBin({
                   <div className="clip-actions">
                     <button
                       type="button"
-                      className="clip-btn add-btn"
-                      aria-label={`Add ${clip.name} to timeline`}
-                      title="Add to Audio Track (+)"
-                      onClick={() => onAddAudioToTimeline(clip.id)}
-                    >
-                      +
-                    </button>
-                    <button
-                      type="button"
                       className="clip-btn remove-btn"
                       aria-label={`Remove ${clip.name}`}
                       title="Remove from pool"
                       onClick={() => onRemoveAudio(clip.id)}
                     >
                       ×
+                    </button>
+                    <button
+                      type="button"
+                      className="clip-btn add-btn"
+                      aria-label={`Add ${clip.name} to timeline`}
+                      title="Add to Audio Track (+)"
+                      onClick={() => onAddAudioToTimeline(clip.id)}
+                    >
+                      +
                     </button>
                   </div>
                 </li>

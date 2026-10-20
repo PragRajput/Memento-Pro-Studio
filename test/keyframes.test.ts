@@ -2,6 +2,8 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert'
 import {
   applyEasing,
+  applyFade,
+  readFade,
   clearTrack,
   evaluateTrack,
   evaluateTracks,
@@ -156,5 +158,67 @@ describe('Keyframes through trims and splits', () => {
   it('keeps the left half of a split intact', () => {
     const tracks: KeyframeTracks = { scale: [frame(0, 1), frame(3, 2)] }
     assert.deepStrictEqual(sliceTracks(tracks, 0, 3)?.scale?.map((f) => f.time), [0, 3])
+  })
+})
+
+describe('Clip fades as opacity keyframes', () => {
+  it('fades up from nothing over the requested time', () => {
+    const tracks = applyFade(undefined, 10, 2, 0)!
+    assert.deepStrictEqual(tracks.opacity?.map((f) => [f.time, f.value]), [[0, 0], [2, 1]])
+  })
+
+  it('fades down to nothing at the very end', () => {
+    const tracks = applyFade(undefined, 10, 0, 3)!
+    assert.deepStrictEqual(tracks.opacity?.map((f) => [f.time, f.value]), [[7, 1], [10, 0]])
+  })
+
+  it('combines both fades without them meeting', () => {
+    const tracks = applyFade(undefined, 10, 2, 2)!
+    assert.deepStrictEqual(
+      tracks.opacity?.map((f) => [f.time, f.value]),
+      [[0, 0], [2, 1], [8, 1], [10, 0]],
+    )
+  })
+
+  it('caps each fade at half the clip so they cannot overlap', () => {
+    const tracks = applyFade(undefined, 4, 10, 10)!
+    const times = tracks.opacity!.map((f) => f.time)
+    assert.deepStrictEqual(times, [0, 2, 2, 4])
+    assert.ok(times.every((t) => t <= 4))
+  })
+
+  it('clears the fade when both lengths are zero', () => {
+    const existing = applyFade(undefined, 10, 2, 2)
+    assert.strictEqual(applyFade(existing, 10, 0, 0), undefined)
+  })
+
+  it('ignores a fade too short to be seen', () => {
+    assert.strictEqual(applyFade(undefined, 10, 0.01, 0), undefined)
+  })
+
+  it('leaves other animated properties alone', () => {
+    const withScale = setKeyframe(undefined, 'scale', 1, 2)
+    const faded = applyFade(withScale, 10, 1, 0)!
+    assert.ok(faded.scale !== undefined, 'scale must survive')
+    assert.ok(faded.opacity !== undefined)
+    // Removing the fade must not take the scale track with it.
+    assert.ok(applyFade(faded, 10, 0, 0)?.scale !== undefined)
+  })
+
+  it('reads back the fades it wrote', () => {
+    const tracks = applyFade(undefined, 10, 1.5, 2.5)
+    assert.deepStrictEqual(readFade(tracks, 10), { fadeIn: 1.5, fadeOut: 2.5 })
+  })
+
+  it('reports no fade for a clip that is not faded', () => {
+    assert.deepStrictEqual(readFade(undefined, 10), { fadeIn: 0, fadeOut: 0 })
+    assert.deepStrictEqual(readFade(setKeyframe(undefined, 'scale', 0, 2), 10), { fadeIn: 0, fadeOut: 0 })
+  })
+
+  it('survives a split, because it is ordinary keyframe data', () => {
+    const tracks = applyFade(undefined, 10, 2, 2)
+    const right = sliceTracks(tracks, 5, 5)
+    assert.ok(right?.opacity !== undefined, 'the tail keeps its fade down')
+    assert.deepStrictEqual(right.opacity?.map((f) => f.time), [3, 5])
   })
 })

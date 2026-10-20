@@ -215,3 +215,69 @@ export function sliceTracks(
   }
   return hasKeyframes(out) ? out : undefined
 }
+
+/** Shortest fade worth keeping, in seconds. */
+const MIN_FADE = 0.05
+
+/**
+ * Express a clip's fade up and fade down as opacity keyframes.
+ *
+ * Fades are not a separate mechanism: a fade *is* animated opacity, and both
+ * renderers already draw that. Writing keyframes means a fade survives trims and
+ * splits, composites correctly on every track, and needs no new render path.
+ *
+ * Any existing opacity keyframes are replaced, since a hand-keyed curve and a
+ * fade control cannot both own the same property.
+ */
+export function applyFade(
+  tracks: KeyframeTracks | undefined,
+  length: number,
+  fadeIn: number,
+  fadeOut: number,
+): KeyframeTracks | undefined {
+  const span = Math.max(0, length)
+  // Neither fade may eat into the other, so each is capped at half the clip.
+  const half = span / 2
+  const up = Math.min(Math.max(0, fadeIn), half)
+  const down = Math.min(Math.max(0, fadeOut), half)
+
+  const frames: Keyframe[] = []
+  if (up >= MIN_FADE) {
+    frames.push({ id: crypto.randomUUID(), time: 0, value: 0, easing: 'ease-in-out' })
+    frames.push({ id: crypto.randomUUID(), time: up, value: 1, easing: 'ease-in-out' })
+  }
+  if (down >= MIN_FADE) {
+    frames.push({ id: crypto.randomUUID(), time: Math.max(up, span - down), value: 1, easing: 'ease-in-out' })
+    frames.push({ id: crypto.randomUUID(), time: span, value: 0, easing: 'ease-in-out' })
+  }
+
+  const next = { ...tracks }
+  if (frames.length === 0) {
+    delete next.opacity
+  } else {
+    next.opacity = sortKeyframes(frames)
+  }
+  return hasKeyframes(next) ? next : undefined
+}
+
+/**
+ * The fade lengths implied by an opacity track, so the controls can show what
+ * is already on the clip. Returns zeros for a track that is not a plain fade.
+ */
+export function readFade(
+  tracks: KeyframeTracks | undefined,
+  length: number,
+): { fadeIn: number; fadeOut: number } {
+  const frames = tracks?.opacity
+  if (frames === undefined || frames.length === 0) return { fadeIn: 0, fadeOut: 0 }
+  const sorted = sortKeyframes(frames)
+  const first = sorted[0]
+  const last = sorted[sorted.length - 1]
+
+  const fadeIn = first.value === 0 && first.time === 0 && sorted.length > 1 ? sorted[1].time : 0
+  const fadeOut =
+    last.value === 0 && sorted.length > 1 && last.time > 0
+      ? Math.max(0, Math.min(length, last.time) - sorted[sorted.length - 2].time)
+      : 0
+  return { fadeIn, fadeOut }
+}

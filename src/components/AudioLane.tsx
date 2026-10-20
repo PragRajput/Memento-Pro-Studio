@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { DragEvent, PointerEvent } from 'react'
 import { AUDIO_EFFECT_PRESETS } from '../audioEffects.ts'
 import { clampAudioStart } from '../audioTimeline.ts'
-import { AUDIO_DRAG_TYPE, AUDIO_EFFECT_DRAG_TYPE } from '../dnd.ts'
+import { AUDIO_DRAG_TYPE } from '../dnd.ts'
 import { formatDuration } from '../format.ts'
 import { extractAudioPeaks, generateFallbackPeaks } from '../media.ts'
 import { itemLength } from '../timeline.ts'
-import type { AudioEffectType, AudioClip, AudioTimelineItem } from '../types.ts'
+import type { AudioClip, AudioTimelineItem } from '../types.ts'
 
 /** Pointer travel, in pixels, before a press on an item becomes a drag. */
 const DRAG_THRESHOLD = 4
@@ -124,8 +124,6 @@ interface AudioLaneProps {
   onAddClip: (clipId: string, desiredStart: number, trackIndex: number) => void
   onMoveItem: (id: string, start: number) => void
   onTrimItem: (id: string, edge: 'in' | 'out', sourceTime: number) => void
-  onApplyEffect?: (itemId: string, effect: AudioEffectType) => void
-  onVolumeChange: (id: string, volume: number) => void
 }
 
 export function AudioLane({
@@ -142,13 +140,10 @@ export function AudioLane({
   onAddClip,
   onMoveItem,
   onTrimItem,
-  onApplyEffect,
-  onVolumeChange,
 }: AudioLaneProps) {
   const trackRef = useRef<HTMLDivElement>(null)
   const [dropMarker, setDropMarker] = useState<number | null>(null)
   const [dragGhost, setDragGhost] = useState<{ id: string; start: number } | null>(null)
-  const [effectDropId, setEffectDropId] = useState<string | null>(null)
 
   const laneItems = items.filter((item) => (item.trackIndex ?? 0) === trackIndex)
 
@@ -256,7 +251,7 @@ export function AudioLane({
         {canRemoveTrack && onRemoveTrack && laneItems.length === 0 && (
           <button
             type="button"
-            className="remove-track-btn"
+            className="track-badge-remove"
             title={`Remove ${label}`}
             onClick={(e) => {
               e.stopPropagation()
@@ -278,31 +273,15 @@ export function AudioLane({
         return (
           <div
             key={item.id}
-            className={`timeline-item audio-item${item.id === selectedItemId ? ' selected' : ''}${ghost !== null ? ' dragging' : ''}${effectDropId === item.id ? ' effect-drop' : ''}`}
+            className={`timeline-item audio-item${item.id === selectedItemId ? ' selected' : ''}${ghost !== null ? ' dragging' : ''}`}
             style={{ left, width: itemLength(item) * pps }}
             title={`${clip?.name ?? 'Missing clip'} · Vol: ${volPercent}% · ${formatDuration(itemLength(item))}`}
             onPointerDown={(event) => beginItemMove(event, item)}
-            onDragOver={(event) => {
-              if (!event.dataTransfer.types.includes(AUDIO_EFFECT_DRAG_TYPE)) return
-              event.preventDefault()
-              event.stopPropagation()
-              event.dataTransfer.dropEffect = 'copy'
-              setEffectDropId(item.id)
-            }}
-            onDragLeave={() => setEffectDropId(null)}
-            onDrop={(event) => {
-              setEffectDropId(null)
-              if (!event.dataTransfer.types.includes(AUDIO_EFFECT_DRAG_TYPE)) return
-              event.preventDefault()
-              event.stopPropagation()
-              const effect = event.dataTransfer.getData(AUDIO_EFFECT_DRAG_TYPE)
-              if (effect) onApplyEffect?.(item.id, effect as AudioEffectType)
-            }}
           >
             <AudioWaveform clip={clip} item={item} pixelsPerSecond={pps} />
             <span className="item-label">
               <span className="audio-badge-mini" aria-hidden="true">♪</span>
-              {clip?.name}
+              <span className="clip-name">{clip?.name}</span>
               {item.effect && item.effect !== 'none' && (
                 <span className="audio-effect-badge-mini" title={`Audio Effect: ${item.effect}`}>
                   {AUDIO_EFFECT_PRESETS.find((p) => p.id === item.effect)?.name ?? 'FX'}
@@ -314,26 +293,6 @@ export function AudioLane({
                 </span>
               )}
             </span>
-            <div className="audio-item-controls" onPointerDown={(event) => event.stopPropagation()}>
-              <button
-                type="button"
-                className="volume-toggle-btn"
-                title={item.volume === 0 ? 'Click to unmute' : 'Click to mute'}
-                onClick={() => onVolumeChange(item.id, item.volume === 0 ? 1 : 0)}
-              >
-                {volPercent}%
-              </button>
-              <input
-                type="range"
-                className="volume-slider"
-                aria-label="Volume"
-                min={0}
-                max={1}
-                step={0.01}
-                value={item.volume}
-                onChange={(event) => onVolumeChange(item.id, Number(event.target.value))}
-              />
-            </div>
             <div
               className="trim-handle in"
               aria-label="Trim start"

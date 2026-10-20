@@ -1,4 +1,4 @@
-# 🎬 Mini Video Editor
+# Memento
 
 A high-performance, studio-grade browser-based video editor built with **React**, **TypeScript**, and **Vite**. 
 
@@ -76,8 +76,8 @@ All decoding, editing, audio processing, and rendering happen **100% client-side
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/mini-video-editor.git
-cd mini-video-editor
+git clone https://github.com/your-username/memento.git
+cd memento
 
 # Install dependencies
 npm install
@@ -121,4 +121,4 @@ A production deployment workflow is included in `.github/workflows/deploy.yml`.
 
 ## 🔒 Privacy & Security
 
-Mini Video Editor is designed around a **local-first, zero-telemetry** architecture. No media, audio, or metadata ever leaves your device. Everything is processed directly within your browser's WebCodecs and Web Audio pipeline.
+Memento is designed around a **local-first, zero-telemetry** architecture. No media, audio, or metadata ever leaves your device. Everything is processed directly within your browser's WebCodecs and Web Audio pipeline.

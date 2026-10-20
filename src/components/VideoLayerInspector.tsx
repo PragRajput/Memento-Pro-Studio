@@ -1,6 +1,7 @@
 import { FILTER_PRESETS } from '../filters.ts'
 import { resetVideoLayerItem } from '../resetSettings.ts'
-import { clearTrack } from '../keyframes.ts'
+import { applyFade, clearTrack, readFade } from '../keyframes.ts'
+import { Slider } from './Slider.tsx'
 import { itemLength } from '../timeline.ts'
 import { videoLayerName } from '../videoLayers.ts'
 import { KeyframeEditor } from './KeyframeEditor.tsx'
@@ -50,6 +51,11 @@ export function VideoLayerInspector({
   onSeekToLocalTime,
 }: VideoLayerInspectorProps) {
   const length = itemLength(item)
+  const fadeLength = length
+  const fade = readFade(item.keyframes, fadeLength)
+  const maxFade = Math.max(0.1, fadeLength / 2)
+  const setFade = (fadeIn: number, fadeOut: number) =>
+    onChange({ ...item, keyframes: applyFade(item.keyframes, fadeLength, fadeIn, fadeOut) })
   const localTime = Math.max(0, Math.min(length, time - item.start))
   const blendMode = item.blendMode ?? 'normal'
   const fitMode = item.fitMode ?? 'contain'
@@ -77,6 +83,62 @@ export function VideoLayerInspector({
       </div>
 
       <div className="inspector-scroll-body">
+        {/* Fade up / down, written as opacity keyframes */}
+        <section className="inspector-section">
+          <div className="section-header-row">
+            <span className="inspector-section-label">Fade</span>
+            <span className="section-value-pill">
+              {fade.fadeIn > 0 || fade.fadeOut > 0
+                ? `${fade.fadeIn.toFixed(1)}s / ${fade.fadeOut.toFixed(1)}s`
+                : 'None'}
+            </span>
+          </div>
+
+          <div className="intensity-slider-wrap">
+            <div className="intensity-label-row">
+              <span className="control-sublabel">Fade in</span>
+              <span
+                className={`control-subvalue${fade.fadeIn > 0 ? ' active' : ''}`}
+                onDoubleClick={() => setFade(0, fade.fadeOut)}
+                title="Double-click to reset"
+              >
+                {fade.fadeIn.toFixed(1)}s
+              </span>
+            </div>
+            <Slider
+              min={0}
+              max={maxFade}
+              step={0.1}
+              value={fade.fadeIn}
+              defaultValue={0}
+              onChange={(val) => setFade(val, fade.fadeOut)}
+              ariaLabel="Fade in duration"
+            />
+          </div>
+
+          <div className="intensity-slider-wrap">
+            <div className="intensity-label-row">
+              <span className="control-sublabel">Fade out</span>
+              <span
+                className={`control-subvalue${fade.fadeOut > 0 ? ' active' : ''}`}
+                onDoubleClick={() => setFade(fade.fadeIn, 0)}
+                title="Double-click to reset"
+              >
+                {fade.fadeOut.toFixed(1)}s
+              </span>
+            </div>
+            <Slider
+              min={0}
+              max={maxFade}
+              step={0.1}
+              value={fade.fadeOut}
+              defaultValue={0}
+              onChange={(val) => setFade(fade.fadeIn, val)}
+              ariaLabel="Fade out duration"
+            />
+          </div>
+        </section>
+
         {onAddKeyframe && onRemoveKeyframe && onChangeEasing && onSeekToLocalTime && (
           <section className="inspector-section">
             <KeyframeEditor

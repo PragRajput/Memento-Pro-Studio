@@ -1,5 +1,6 @@
 import { clamp } from '../timeline.ts'
 import { resetTransition } from '../resetSettings.ts'
+import { Slider } from './Slider.tsx'
 import { TRANSITION_TYPES } from '../transitionTimeline.ts'
 import type { Transition, TransitionEasing } from '../types.ts'
 
@@ -115,20 +116,26 @@ export function TransitionInspector({
         <div className="inspector-group">
           <div className="group-header-row">
             <span className="group-label">Duration</span>
-            <span className="group-value-badge">{currentDuration.toFixed(1)}s</span>
+            <span
+              className="group-value-badge"
+              style={{ cursor: 'pointer' }}
+              onDoubleClick={() => onChange({ ...transition, duration: clamp(0.8, 0.2, maxDuration) })}
+              title="Double-click to reset"
+            >
+              {currentDuration.toFixed(1)}s
+            </span>
           </div>
           <div className="slider-with-presets">
-            <input
-              type="range"
-              className="inspector-slider"
+            <Slider
               min={0.2}
               max={maxDuration}
               step={0.05}
               value={currentDuration}
-              onChange={(event) =>
-                onChange({ ...transition, duration: clamp(Number(event.target.value), 0.2, maxDuration) })
+              defaultValue={clamp(0.8, 0.2, maxDuration)}
+              onChange={(val) =>
+                onChange({ ...transition, duration: clamp(val, 0.2, maxDuration) })
               }
-              aria-label="Transition duration"
+              ariaLabel="Transition duration"
             />
             <div className="segmented-control mini">
               {DURATION_PRESETS.map((val) => {
@@ -202,16 +209,23 @@ export function TransitionInspector({
         <div className="inspector-group">
           <div className="group-header-row">
             <span className="group-label">Effect Strength</span>
-            <span className="group-value-badge">{strength}%</span>
+            <span
+              className="group-value-badge"
+              style={{ cursor: 'pointer' }}
+              onDoubleClick={() => onChange({ ...transition, transitionStrength: 1 })}
+              title="Double-click to reset"
+            >
+              {strength}%
+            </span>
           </div>
-          <input
-            type="range"
-            className="inspector-slider"
+          <Slider
             min={0}
             max={1}
             step={0.05}
             value={transition.transitionStrength ?? 1}
-            onChange={(e) => onChange({ ...transition, transitionStrength: parseFloat(e.target.value) })}
+            defaultValue={1}
+            onChange={(val) => onChange({ ...transition, transitionStrength: val })}
+            ariaLabel="Transition strength slider"
           />
         </div>
 
@@ -220,16 +234,23 @@ export function TransitionInspector({
           <div className="inspector-group">
             <div className="group-header-row">
               <span className="group-label">Edge Softness (Feather)</span>
-              <span className="group-value-badge">{softness}%</span>
+              <span
+                className="group-value-badge"
+                style={{ cursor: 'pointer' }}
+                onDoubleClick={() => onChange({ ...transition, transitionSoftness: 0 })}
+                title="Double-click to reset"
+              >
+                {softness}%
+              </span>
             </div>
-            <input
-              type="range"
-              className="inspector-slider"
+            <Slider
               min={0}
               max={1}
               step={0.05}
               value={transition.transitionSoftness ?? 0}
-              onChange={(e) => onChange({ ...transition, transitionSoftness: parseFloat(e.target.value) })}
+              defaultValue={0}
+              onChange={(val) => onChange({ ...transition, transitionSoftness: val })}
+              ariaLabel="Edge softness slider"
             />
           </div>
         )}

@@ -4,6 +4,7 @@ import {
   PROPERTY_DEFAULTS,
   evaluateTrack,
 } from '../keyframes.ts'
+import { Slider } from './Slider.tsx'
 import type { PropertyMeta } from '../keyframes.ts'
 import type { AnimatableProperty, EasingType, Keyframe, KeyframeTracks } from '../types.ts'
 
@@ -117,20 +118,18 @@ export function KeyframeEditor({
               )}
             </div>
 
-            <input
-              id={`kf-${meta.id}`}
-              type="range"
+            <Slider
               min={meta.min}
               max={meta.max}
               step={meta.step}
               value={value}
-              onChange={(event) => {
-                const next = Number(event.target.value)
-                // Once a property is animated, dragging writes a keyframe at the
-                // playhead instead of a static value, as editors conventionally do.
+              defaultValue={PROPERTY_DEFAULTS[meta.id]}
+              bipolar={meta.min < 0 && meta.max > 0}
+              onChange={(next) => {
                 if (animated) onAddKeyframe(meta.id, next)
                 else onSetStatic(meta.id, next)
               }}
+              ariaLabel={meta.name}
             />
 
             {animated && (

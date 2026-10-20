@@ -1,5 +1,6 @@
 import type { TextAnimationType, TextOverlay } from '../types.ts'
 import { resetTextOverlay } from '../resetSettings.ts'
+import { Slider } from './Slider.tsx'
 import { TITLE_PRESETS } from '../textStyle.ts'
 
 interface TextInspectorProps {
@@ -182,17 +183,24 @@ export function TextInspector({ item, onChange, onDelete, onClose }: TextInspect
         <div className="inspector-group">
           <div className="group-header-row">
             <span className="group-label">Size</span>
-            <span className="group-value-badge">{currentFontSize}px</span>
+            <span
+              className="group-value-badge"
+              style={{ cursor: 'pointer' }}
+              onDoubleClick={() => setFontSize(48)}
+              title="Double-click to reset"
+            >
+              {currentFontSize}px
+            </span>
           </div>
           <div className="slider-with-presets">
-            <input
-              type="range"
-              className="inspector-slider"
+            <Slider
               min={18}
               max={120}
               step={1}
               value={currentFontSize}
-              onChange={(event) => setFontSize(Number(event.target.value))}
+              defaultValue={48}
+              onChange={setFontSize}
+              ariaLabel="Font size slider"
             />
             <div className="segmented-control mini">
               {[
@@ -330,14 +338,14 @@ export function TextInspector({ item, onChange, onDelete, onClose }: TextInspect
                 value={item.textStrokeColor ?? '#000000'}
                 onChange={(e) => onChange({ ...item, textStrokeColor: e.target.value })}
               />
-              <input
-                type="range"
-                className="inspector-slider"
+              <Slider
                 min={0}
                 max={0.25}
                 step={0.01}
                 value={item.textStrokeWidth ?? 0}
-                onChange={(e) => onChange({ ...item, textStrokeWidth: parseFloat(e.target.value) })}
+                defaultValue={0}
+                onChange={(val) => onChange({ ...item, textStrokeWidth: val })}
+                ariaLabel="Text stroke width"
               />
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -348,14 +356,14 @@ export function TextInspector({ item, onChange, onDelete, onClose }: TextInspect
                 value={item.textGlowColor ?? '#38bdf8'}
                 onChange={(e) => onChange({ ...item, textGlowColor: e.target.value })}
               />
-              <input
-                type="range"
-                className="inspector-slider"
+              <Slider
                 min={0}
                 max={0.6}
                 step={0.02}
                 value={item.textGlowBlur ?? 0}
-                onChange={(e) => onChange({ ...item, textGlowBlur: parseFloat(e.target.value) })}
+                defaultValue={0}
+                onChange={(val) => onChange({ ...item, textGlowBlur: val })}
+                ariaLabel="Text glow blur"
               />
             </div>
           </div>
@@ -367,29 +375,45 @@ export function TextInspector({ item, onChange, onDelete, onClose }: TextInspect
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span className="control-sublabel" style={{ width: '60px' }}>Tracking</span>
-              <input
-                type="range"
-                className="inspector-slider"
+              <Slider
                 min={-0.05}
                 max={0.3}
                 step={0.01}
                 value={item.textLetterSpacing ?? 0}
-                onChange={(e) => onChange({ ...item, textLetterSpacing: parseFloat(e.target.value) })}
+                bipolar={true}
+                defaultValue={0}
+                onChange={(val) => onChange({ ...item, textLetterSpacing: val })}
+                ariaLabel="Text letter spacing"
               />
-              <span className="control-subvalue">{Math.round((item.textLetterSpacing ?? 0) * 100)}%</span>
+              <span
+                className={`control-subvalue${(item.textLetterSpacing ?? 0) !== 0 ? ' active' : ''}`}
+                style={{ width: '42px', textAlign: 'center' }}
+                onDoubleClick={() => onChange({ ...item, textLetterSpacing: 0 })}
+                title="Double-click to reset"
+              >
+                {Math.round((item.textLetterSpacing ?? 0) * 100)}%
+              </span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span className="control-sublabel" style={{ width: '60px' }}>Rotation</span>
-              <input
-                type="range"
-                className="inspector-slider"
+              <Slider
                 min={-45}
                 max={45}
                 step={1}
                 value={item.textRotation ?? 0}
-                onChange={(e) => onChange({ ...item, textRotation: parseInt(e.target.value, 10) })}
+                bipolar={true}
+                defaultValue={0}
+                onChange={(val) => onChange({ ...item, textRotation: Math.round(val) })}
+                ariaLabel="Text rotation angle"
               />
-              <span className="control-subvalue">{item.textRotation ?? 0}°</span>
+              <span
+                className={`control-subvalue${(item.textRotation ?? 0) !== 0 ? ' active' : ''}`}
+                style={{ width: '42px', textAlign: 'center' }}
+                onDoubleClick={() => onChange({ ...item, textRotation: 0 })}
+                title="Double-click to reset"
+              >
+                {item.textRotation ?? 0}°
+              </span>
             </div>
           </div>
         </div>

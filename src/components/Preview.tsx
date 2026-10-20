@@ -6,7 +6,7 @@ import { ClipInspector } from './ClipInspector.tsx'
 import { OverlayInspector } from './OverlayInspector.tsx'
 import { TextInspector } from './TextInspector.tsx'
 import { TransitionInspector } from './TransitionInspector.tsx'
-import { VIGNETTE, vignetteAlpha } from '../filters.ts'
+import { VIGNETTE, getCssFilter, vignetteAlpha } from '../filters.ts'
 import {
   VFX_OVERLAY_PRESETS,
   grainTileHeightFraction,
@@ -21,7 +21,7 @@ import { edgeFadeAt } from '../transitionTimeline.ts'
 import { locate } from '../timeline.ts'
 import { VideoLayerStage } from './VideoLayerStage.tsx'
 import { VideoLayerInspector } from './VideoLayerInspector.tsx'
-import type { AnimatableProperty, AspectRatio, AudioClip, AudioTimelineItem, EasingType, EdgeFades, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from '../types.ts'
+import type { AnimatableProperty, AspectRatio, MasterGrade, AudioClip, AudioTimelineItem, EasingType, EdgeFades, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from '../types.ts'
 
 function PipVideo({
   src,
@@ -144,6 +144,7 @@ interface PreviewProps {
   secondaryImageRef?: RefObject<HTMLImageElement | null>
   timelineAudioRef: RefObject<HTMLAudioElement | null>
   timelineVeilRef?: RefObject<HTMLDivElement | null>
+  masterGrade?: MasterGrade
   textItems: TextOverlay[]
   selectedTextId: string | null
   time: number
@@ -208,6 +209,7 @@ export function Preview({
   secondaryImageRef,
   timelineAudioRef,
   timelineVeilRef,
+  masterGrade,
   textItems,
   selectedTextId,
   time,
@@ -419,6 +421,12 @@ export function Preview({
             hidden={!showingTimeline || timelineEmpty}
             style={{ aspectRatio: (aspectRatio ?? '16:9').replace(':', ' / ') }}
           >
+            {/* The master grade covers the footage, not the titling or overlays
+                drawn over it, which is where a programme grade normally sits. */}
+            <div
+              className="preview-program"
+              style={{ filter: getCssFilter(masterGrade?.filter, masterGrade?.filterIntensity, masterGrade) }}
+            >
             {hasVideo ? (
               <>
                 <video ref={timelineVideoRef} className="preview-video primary" />
@@ -464,6 +472,7 @@ export function Preview({
               playing={playing}
               selectedLayerItemId={selectedLayerItemId}
             />
+            </div>
 
             <div className="preview-overlay">
               {/* Active Overlay Indicator Pill */}

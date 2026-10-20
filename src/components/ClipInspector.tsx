@@ -1,6 +1,8 @@
-import { FILTER_PRESETS, hasManualGrade } from '../filters.ts'
+import { FILTER_PRESETS } from '../filters.ts'
 import { resetTimelineItem } from '../resetSettings.ts'
-import { clearTrack } from '../keyframes.ts'
+import { applyFade, clearTrack, readFade } from '../keyframes.ts'
+import { GradeControls } from './GradeControls.tsx'
+import { Slider } from './Slider.tsx'
 import { itemLength } from '../timeline.ts'
 import { KeyframeEditor } from './KeyframeEditor.tsx'
 import type { AnimatableProperty, EasingType, MediaClip, TimelineItem } from '../types.ts'
@@ -37,6 +39,11 @@ export function ClipInspector({
   onSeekToLocalTime,
 }: ClipInspectorProps) {
   const currentSpeed = item.speed ?? 1
+  const fadeLength = itemLength(item)
+  const fade = readFade(item.keyframes, fadeLength)
+  const maxFade = Math.max(0.1, fadeLength / 2)
+  const setFade = (fadeIn: number, fadeOut: number) =>
+    onChange({ ...item, keyframes: applyFade(item.keyframes, fadeLength, fadeIn, fadeOut) })
   const currentFilter = item.filter ?? 'none'
   const filterIntensity = item.filterIntensity ?? 1
   const rotation = item.rotation ?? 0
@@ -66,6 +73,60 @@ export function ClipInspector({
       </div>
 
       <div className="inspector-scroll-body">
+        {/* Fade up / down, written as opacity keyframes */}
+        <section className="inspector-section">
+          <div className="section-header-row">
+            <span className="inspector-section-label">Fade</span>
+            <span className="section-value-pill">
+              {fade.fadeIn > 0 || fade.fadeOut > 0
+                ? `${fade.fadeIn.toFixed(1)}s / ${fade.fadeOut.toFixed(1)}s`
+                : 'None'}
+            </span>
+          </div>
+
+          <div className="intensity-slider-wrap">
+            <div className="intensity-label-row">
+              <span className="control-sublabel">Fade in</span>
+              <span
+                className={`control-subvalue${fade.fadeIn > 0 ? ' active' : ''}`}
+                onDoubleClick={() => setFade(0, fade.fadeOut)}
+                title="Double-click to reset"
+              >
+                {fade.fadeIn.toFixed(1)}s
+              </span>
+            </div>
+            <Slider
+              min={0}
+              max={maxFade}
+              step={0.1}
+              value={fade.fadeIn}
+              defaultValue={0}
+              onChange={(val) => setFade(val, fade.fadeOut)}
+            />
+          </div>
+
+          <div className="intensity-slider-wrap">
+            <div className="intensity-label-row">
+              <span className="control-sublabel">Fade out</span>
+              <span
+                className={`control-subvalue${fade.fadeOut > 0 ? ' active' : ''}`}
+                onDoubleClick={() => setFade(fade.fadeIn, 0)}
+                title="Double-click to reset"
+              >
+                {fade.fadeOut.toFixed(1)}s
+              </span>
+            </div>
+            <Slider
+              min={0}
+              max={maxFade}
+              step={0.1}
+              value={fade.fadeOut}
+              defaultValue={0}
+              onChange={(val) => setFade(fade.fadeIn, val)}
+            />
+          </div>
+        </section>
+
         {onAddKeyframe && onRemoveKeyframe && onChangeEasing && onSeekToLocalTime && (
           <section className="inspector-section">
             <KeyframeEditor
@@ -157,68 +218,7 @@ export function ClipInspector({
           )}
         </section>
 
-        {/* Manual Colour Grading */}
-        <section className="inspector-section">
-          <div className="section-header-row">
-            <span className="inspector-section-label">Manual Colour Grading</span>
-            {hasManualGrade(item) && (
-              <button
-                type="button"
-                className="section-reset-link"
-                onClick={() =>
-                  onChange({
-                    ...item,
-                    filterExposure: undefined,
-                    filterContrast: undefined,
-                    filterSaturation: undefined,
-                    filterTemperature: undefined,
-                    filterTint: undefined,
-                    filterHighlights: undefined,
-                    filterShadows: undefined,
-                    filterFade: undefined,
-                    filterVignette: undefined,
-                    filterGrain: undefined,
-                    filterSharpen: undefined,
-                  })
-                }
-              >
-                Reset
-              </button>
-            )}
-          </div>
-
-          <div className="manual-grade-controls">
-            {[
-              { key: 'filterExposure', label: 'Exposure', min: -100, max: 100, step: 1, val: item.filterExposure ?? 0 },
-              { key: 'filterContrast', label: 'Contrast', min: -100, max: 100, step: 1, val: item.filterContrast ?? 0 },
-              { key: 'filterSaturation', label: 'Saturation', min: -100, max: 100, step: 1, val: item.filterSaturation ?? 0 },
-              { key: 'filterTemperature', label: 'Temperature (K)', min: -100, max: 100, step: 1, val: item.filterTemperature ?? 0 },
-              { key: 'filterTint', label: 'Tint (G/M)', min: -100, max: 100, step: 1, val: item.filterTint ?? 0 },
-              { key: 'filterHighlights', label: 'Highlights', min: -100, max: 100, step: 1, val: item.filterHighlights ?? 0 },
-              { key: 'filterShadows', label: 'Shadows', min: -100, max: 100, step: 1, val: item.filterShadows ?? 0 },
-              { key: 'filterFade', label: 'Black Fade', min: 0, max: 100, step: 1, val: item.filterFade ?? 0 },
-              { key: 'filterVignette', label: 'Vignette', min: 0, max: 100, step: 1, val: item.filterVignette ?? 0 },
-              { key: 'filterGrain', label: 'Film Grain', min: 0, max: 100, step: 1, val: item.filterGrain ?? 0 },
-              { key: 'filterSharpen', label: 'Sharpen', min: 0, max: 100, step: 1, val: item.filterSharpen ?? 0 },
-            ].map(({ key, label, min, max, step, val }) => (
-              <div key={key} className="grade-slider-row">
-                <div className="grade-label-line">
-                  <span className="control-sublabel">{label}</span>
-                  <span className="control-subvalue">{val > 0 && min < 0 ? `+${val}` : val}</span>
-                </div>
-                <input
-                  type="range"
-                  min={min}
-                  max={max}
-                  step={step}
-                  value={val}
-                  onChange={(e) => onChange({ ...item, [key]: Number(e.target.value) })}
-                  className="inspector-slider"
-                />
-              </div>
-            ))}
-          </div>
-        </section>
+        <GradeControls grade={item} onChange={onChange} showPresets={false} />
 
         {/* Transform: Rotate, Flip, Fit Mode */}
         <section className="inspector-section">

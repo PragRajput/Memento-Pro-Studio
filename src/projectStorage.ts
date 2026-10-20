@@ -1,5 +1,8 @@
-import type { AspectRatio, AudioClip, AudioTimelineItem, EdgeFades, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from './types.ts'
+import type { AspectRatio, AudioClip, AudioTimelineItem, EdgeFades, MasterGrade, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from './types.ts'
 
+// Deliberately keeps its original name through the rename to Memento: the
+// database name is the key to every saved project, so changing it would orphan
+// existing work rather than migrate it.
 const DB_NAME = 'MiniVideoEditorDB'
 const DB_VERSION = 1
 const STORE_NAME = 'project_store'
@@ -43,6 +46,7 @@ interface ProjectMeta {
   audioTrackCount: number
   aspectRatio?: AspectRatio
   edgeFades?: EdgeFades
+  masterGrade?: MasterGrade
   /** Which stored assets this project uses; the assets themselves are not here. */
   clipIds: string[]
   audioClipIds: string[]
@@ -74,6 +78,7 @@ export interface RestoredProject {
   audioTrackCount: number
   aspectRatio: AspectRatio
   edgeFades?: EdgeFades
+  masterGrade?: MasterGrade
 }
 
 function openDB(): Promise<IDBDatabase> {
@@ -200,6 +205,7 @@ export async function persistProjectMeta(
   overlayItems: readonly OverlayItem[] = [],
   videoLayers: readonly VideoLayerItem[] = [],
   edgeFades?: EdgeFades,
+  masterGrade?: MasterGrade,
 ): Promise<void> {
   if (typeof indexedDB === 'undefined') return
   try {
@@ -216,6 +222,7 @@ export async function persistProjectMeta(
       audioTrackCount,
       aspectRatio,
       edgeFades,
+      masterGrade,
       clipIds: clips.map((c) => c.id),
       audioClipIds: audioClips.map((c) => c.id),
     }
@@ -341,6 +348,7 @@ export async function restoreProject(): Promise<RestoredProject | null> {
       audioTrackCount: meta.audioTrackCount ?? 2,
       aspectRatio: meta.aspectRatio ?? '16:9',
       edgeFades: meta.edgeFades ?? {},
+      masterGrade: meta.masterGrade ?? {},
     }
   } catch (err) {
     console.warn('Failed to restore project from IndexedDB:', err)
