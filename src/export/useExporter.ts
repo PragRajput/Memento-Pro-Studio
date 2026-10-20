@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AspectRatio, AudioClip, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition } from '../types.ts'
+import type { AspectRatio, AudioClip, AudioTimelineItem, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from '../types.ts'
 import { exportTimeline } from './exportTimeline.ts'
 import type { ExportResult } from './exportTimeline.ts'
 
@@ -20,6 +20,8 @@ export function useExporter(
   textItems: readonly TextOverlay[] = [],
   transitions: readonly Transition[] = [],
   aspectRatio: AspectRatio = '16:9',
+  overlayItems: readonly OverlayItem[] = [],
+  videoLayers: readonly VideoLayerItem[] = [],
 ) {
   const [state, setState] = useState<ExportState>({ status: 'idle' })
   const controllerRef = useRef<AbortController | null>(null)
@@ -39,12 +41,23 @@ export function useExporter(
     controllerRef.current = controller
     setState({ status: 'running', stage: 'Preparing', fraction: 0 })
     try {
-      const result = await exportTimeline(items, clips, audioItems, audioClips, textItems, transitions, aspectRatio, {
-        signal: controller.signal,
-        onProgress: (stage, fraction) => {
-          if (!controller.signal.aborted) setState({ status: 'running', stage, fraction })
+      const result = await exportTimeline(
+        items,
+        clips,
+        audioItems,
+        audioClips,
+        textItems,
+        transitions,
+        aspectRatio,
+        overlayItems,
+        videoLayers,
+        {
+          signal: controller.signal,
+          onProgress: (stage, fraction) => {
+            if (!controller.signal.aborted) setState({ status: 'running', stage, fraction })
+          },
         },
-      })
+      )
       setState(
         controller.signal.aborted
           ? CANCELLED
@@ -59,7 +72,7 @@ export function useExporter(
     } finally {
       if (controllerRef.current === controller) controllerRef.current = null
     }
-  }, [items, clips, audioItems, audioClips, textItems, transitions, aspectRatio])
+  }, [items, clips, audioItems, audioClips, textItems, transitions, aspectRatio, overlayItems, videoLayers])
 
 
   const cancel = useCallback(() => controllerRef.current?.abort(), [])

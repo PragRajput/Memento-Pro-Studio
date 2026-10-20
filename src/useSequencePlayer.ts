@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { getClipTransform, getCssFilter } from './filters.ts'
-import { clamp, itemStarts, locate, timelineDuration } from './timeline.ts'
-import { locateTransition } from './transitionTimeline.ts'
+import { clamp, locate, timelineDuration } from './timeline.ts'
+import { evaluateTransform, transformToCss } from './transform.ts'
+import type { EvaluatedTransform } from './transform.ts'
+import { locateTransition, transitionAudioGains } from './transitionTimeline.ts'
 import type { MediaClip, TimelineItem, Transition, TransitionType } from './types.ts'
 
 /** How close to an item's out point playback moves on to the next item. */
@@ -12,12 +14,24 @@ function hideElement(el: HTMLElement | null) {
   if (el) el.style.display = 'none'
 }
 
-function resetElementStyles(el: HTMLElement | null, item?: TimelineItem | null) {
+/**
+ * The animated transform goes outside the clip's own orientation, matching the
+ * export renderer, so a keyed rotation spins the upright picture.
+ */
+function combinedTransform(item: TimelineItem | null | undefined, animated: EvaluatedTransform): string {
+  const orientation = getClipTransform(item)
+  const motion = transformToCss(animated)
+  if (!motion) return orientation
+  return orientation === 'none' ? motion : `${motion} ${orientation}`
+}
+
+function resetElementStyles(el: HTMLElement | null, item?: TimelineItem | null, localTime = 0) {
   if (!el) return
-  el.style.opacity = '1'
+  const animated = evaluateTransform(item, localTime)
+  el.style.opacity = `${clamp(animated.opacity, 0, 1)}`
   el.style.clipPath = 'none'
-  el.style.transform = getClipTransform(item)
-  el.style.filter = getCssFilter(item?.filter, item?.filterIntensity)
+  el.style.transform = combinedTransform(item, animated)
+  el.style.filter = getCssFilter(item?.filter, item?.filterIntensity, item)
 }
 
 /**
@@ -70,11 +84,9 @@ export function useSequencePlayer(
       const secImage = secondaryImageRef?.current ?? null
       if (video === null && image === null) return
 
-      const activeTransition = locateTransition(items, transitions, t)
+      const activeTransition = locateTransition(items, transitions, t, clips)
       if (activeTransition !== null) {
-        const { itemA, itemB, progress, sourceTimeA, sourceTimeB, transition, indexB } = activeTransition
-        const starts = itemStarts(items)
-        const cutTime = starts[indexB]
+        const { itemA, itemB, progress, easedProgress, sourceTimeA, sourceTimeB, transition } = activeTransition
         const clipA = clips.get(itemA.clipId)
         const clipB = clips.get(itemB.clipId)
 
@@ -82,14 +94,28 @@ export function useSequencePlayer(
           // In transition:
           // Clip A is on primary element: plays up to cutTime, then holds its last frame.
           // Clip B is on secondary element: waits at inPoint until cutTime, then plays from cutTime onward.
-          const isAActive = isPlaying && t < cutTime
-          const isBActive = isPlaying && t >= cutTime
+          // Both clips play right through the window, each running into the
+          // unused source either side of the cut. Gating them on the cut time,
+          // as this once did, froze whichever clip was not 'current'.
+          const elA = renderPrimaryClip(clipA, itemA, sourceTimeA, video, image, isPlaying)
+          const elB = renderSecondaryClip(clipB, itemB, sourceTimeB, secVideo, secImage, isPlaying, isPlaying)
 
-          const elA = renderPrimaryClip(clipA, itemA, sourceTimeA, video, image, isAActive)
-          const elB = renderSecondaryClip(clipB, itemB, sourceTimeB, secVideo, secImage, isPlaying, isBActive)
+          // Blend the two clips' own sound instead of hard-cutting at the join.
+          const gains = transitionAudioGains(transition, progress)
+          if (video !== null) video.volume = itemA.muted ? 0 : gains.a
+          if (secVideo !== null) secVideo.volume = itemB.muted ? 0 : gains.b
 
           if (elA && elB) {
-            applyTransitionStyle(elA, elB, transition.type, progress, itemA, itemB)
+            applyTransitionStyle(
+              elA,
+              elB,
+              transition.type,
+              easedProgress,
+              itemA,
+              itemB,
+              evaluateTransform(itemA, sourceTimeA - itemA.inPoint),
+              evaluateTransform(itemB, sourceTimeB - itemB.inPoint),
+            )
           }
           return
         }
@@ -105,7 +131,16 @@ export function useSequencePlayer(
         if (secVideo && !secVideo.paused) {
           secVideo.pause()
         }
-        if (items.length > 0 && t >= timelineDuration(items)) {
+        const videoEnd = timelineDuration(items)
+        const hasExtendedMedia = (totalDuration ?? 0) > videoEnd + END_TOLERANCE
+
+        // If the song/timeline extends past the video clips, turn to a black screen once the video is over!
+        if (hasExtendedMedia && t >= videoEnd) {
+          renderPrimaryClip(undefined, undefined, 0, video, image, false)
+          return
+        }
+
+        if (!hasExtendedMedia && items.length > 0 && t >= videoEnd - END_TOLERANCE) {
           const lastItem = items[items.length - 1]
           const lastClip = clips.get(lastItem.clipId)
           if (lastClip !== undefined) {
@@ -117,7 +152,7 @@ export function useSequencePlayer(
               image,
               false,
             )
-            resetElementStyles(el, lastItem)
+            resetElementStyles(el, lastItem, (lastItem.outPoint - lastItem.inPoint) / (lastItem.speed ?? 1))
             return
           }
         }
@@ -127,7 +162,7 @@ export function useSequencePlayer(
 
       const targetSourceTime = item.inPoint + Math.min(position.offset * (item.speed ?? 1), item.outPoint - item.inPoint - END_TOLERANCE)
       const el = renderPrimaryClip(clip, item, targetSourceTime, video, image, isPlaying)
-      resetElementStyles(el, item)
+      resetElementStyles(el, item, position.offset)
 
       // Graceful hand-off from secondary layer to primary layer:
       // While primary is preparing/loading the new clip, keep secondary visible on top (z-index: 2)
@@ -157,7 +192,7 @@ export function useSequencePlayer(
         }
       }
     },
-    [videoRef, secondaryVideoRef, imageRef, secondaryImageRef, items, clips, transitions],
+    [videoRef, secondaryVideoRef, imageRef, secondaryImageRef, items, clips, transitions, totalDuration],
   )
 
   // While paused, render the frame/photo under the playhead whenever time or items change.
@@ -377,13 +412,15 @@ export function applyTransitionStyle(
   progress: number,
   itemA?: TimelineItem | null,
   itemB?: TimelineItem | null,
+  transformA: EvaluatedTransform = evaluateTransform(itemA, 0),
+  transformB: EvaluatedTransform = evaluateTransform(itemB, 0),
 ) {
   const p = clamp(progress, 0, 1)
 
-  const baseTransA = getClipTransform(itemA)
-  const baseTransB = getClipTransform(itemB)
-  const baseFiltA = getCssFilter(itemA?.filter, itemA?.filterIntensity)
-  const baseFiltB = getCssFilter(itemB?.filter, itemB?.filterIntensity)
+  const baseTransA = combinedTransform(itemA, transformA)
+  const baseTransB = combinedTransform(itemB, transformB)
+  const baseFiltA = getCssFilter(itemA?.filter, itemA?.filterIntensity, itemA)
+  const baseFiltB = getCssFilter(itemB?.filter, itemB?.filterIntensity, itemB)
 
   const combineTrans = (base: string, extra: string) => {
     if (!base || base === 'none') return extra
@@ -472,6 +509,10 @@ export function applyTransitionStyle(
     secondary.style.filter = combineFilt(baseFiltB, `blur(${(1 - p) * 16}px)`)
     secondary.style.opacity = `${p}`
   }
+
+  // Fold each clip's own animated opacity into whatever the transition just set.
+  primary.style.opacity = `${clamp(Number(primary.style.opacity || '1') * transformA.opacity, 0, 1)}`
+  secondary.style.opacity = `${clamp(Number(secondary.style.opacity || '1') * transformB.opacity, 0, 1)}`
 }
 
 function ignoreInterruptedPlay(error: unknown) {

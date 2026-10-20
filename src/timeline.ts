@@ -29,15 +29,20 @@ export interface TimelinePosition {
   offset: number
 }
 
-/** Find the item at a timeline time. Times at or past the end map to the end of the last item. */
+/** Find the item at a timeline time. Times strictly past the timeline duration return null. */
 export function locate(items: readonly TimelineItem[], time: number): TimelinePosition | null {
   let start = 0
   for (const [index, item] of items.entries()) {
     const length = itemLength(item)
-    if (time < start + length || index === items.length - 1) {
+    if (time < start + length) {
       return { index, offset: clamp(time - start, 0, length) }
     }
     start += length
+  }
+  // Allow an epsilon-close match at the exact end boundary
+  if (items.length > 0 && Math.abs(time - start) < 1e-4) {
+    const lastIndex = items.length - 1
+    return { index: lastIndex, offset: itemLength(items[lastIndex]) }
   }
   return null
 }

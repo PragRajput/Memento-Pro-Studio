@@ -47,5 +47,16 @@ describe('Footage orientation and export sizing', () => {
     assert.equal(plan.items[0].sourceTimes.length, 60)
     assert.equal(plan.items[1].sourceTimes.length, 60)
   })
+
+  it('extends plan frameCount to match totalDuration when audio is longer than video', () => {
+    const items: TimelineItem[] = [
+      { id: 'item-1', clipId: 'clip-1', inPoint: 0, outPoint: 2 },
+    ]
+    const plan = planFrames(items, 30, 5)
+    assert.equal(plan.duration, 5)
+    assert.equal(plan.frameCount, 150)
+    assert.equal(plan.items.length, 1)
+    assert.equal(plan.items[0].sourceTimes.length, 60)
+  })
 })
 

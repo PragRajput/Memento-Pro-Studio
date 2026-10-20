@@ -215,10 +215,13 @@ export function AudioLane({
     element.setPointerCapture(event.pointerId)
     const startX = event.clientX
     const startValue = edge === 'in' ? item.inPoint : item.outPoint
+    // A timeline-second of drag is `speed` source-seconds, since sped-up/slowed-down
+    // source time passes faster/slower than the timeline time the pixels measure.
+    const speed = item.speed ?? 1
     onSelectItem(item.id)
 
     const onMove = (move: globalThis.PointerEvent) =>
-      onTrimItem(item.id, edge, startValue + (move.clientX - startX) / pps)
+      onTrimItem(item.id, edge, startValue + ((move.clientX - startX) / pps) * speed)
     const finish = () => {
       element.removeEventListener('pointermove', onMove)
       element.removeEventListener('pointerup', finish)

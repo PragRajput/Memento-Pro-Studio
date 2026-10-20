@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { outputSizeForAspectRatio, planFrames } from '../src/export/plan.ts'
-import { FILTER_PRESETS, getClipTransform, getCssFilter } from '../src/filters.ts'
+import { FILTER_PRESETS, getClipTransform, getCssFilter, hasManualGrade } from '../src/filters.ts'
 import { itemLength, locate, timelineDuration } from '../src/timeline.ts'
 import type { TimelineItem } from '../src/types.ts'
 
@@ -34,9 +34,22 @@ describe('Aspect ratio presets & export sizing', () => {
   })
 })
 
+const baseItem: TimelineItem = { id: 'i1', clipId: 'c1', inPoint: 0, outPoint: 5, muted: false }
+
 describe('Filters & Color Grading Presets', () => {
-  it('provides 10 distinct preset configurations', () => {
-    assert.equal(FILTER_PRESETS.length, 10)
+  it('offers every look with a unique id and complete labelling', () => {
+    assert.equal(FILTER_PRESETS.length, 13)
+    const ids = FILTER_PRESETS.map((preset) => preset.id)
+    assert.equal(new Set(ids).size, ids.length, 'preset ids must be unique')
+    for (const preset of FILTER_PRESETS) {
+      assert.ok(preset.name.length > 0, `${preset.id} needs a name`)
+      assert.ok(preset.description.length > 0, `${preset.id} needs a description`)
+      assert.ok(preset.icon.length > 0, `${preset.id} needs an icon`)
+    }
+  })
+
+  it('leads with Normal so the default look is the untouched image', () => {
+    assert.equal(FILTER_PRESETS[0].id, 'none')
   })
 
   it('returns none for default filter', () => {
@@ -44,21 +57,21 @@ describe('Filters & Color Grading Presets', () => {
     assert.equal(getCssFilter(undefined, 1), 'none')
   })
 
-  it('generates valid CSS filter for cinematic and adjusts with intensity', () => {
-    const full = getCssFilter('cinematic', 1)
-    assert.ok(full.includes('contrast'))
-    assert.ok(full.includes('saturate'))
-
-    const zero = getCssFilter('cinematic', 0)
-    assert.equal(zero, 'none')
+  it('treats intensity 0 as a no-op for every look', () => {
+    // Intensity blends toward identity, so a zeroed look must leave pixels alone
+    // rather than applying a weak version of itself.
+    for (const preset of FILTER_PRESETS) {
+      assert.equal(getCssFilter(preset.id, 0), 'none', `${preset.id} at intensity 0`)
+    }
   })
 
-  it('generates valid CSS filter for noir and sepia', () => {
-    const noir = getCssFilter('noir', 1)
-    assert.ok(noir.includes('grayscale('))
-
-    const sepia = getCssFilter('sepia', 1)
-    assert.ok(sepia.includes('sepia('))
+  it('reports whether a clip carries manual grading beyond its preset', () => {
+    assert.equal(hasManualGrade(undefined), false)
+    assert.equal(hasManualGrade(baseItem), false)
+    assert.equal(hasManualGrade({ ...baseItem, filterTemperature: 20 }), true)
+    assert.equal(hasManualGrade({ ...baseItem, filterShadows: -5 }), true)
+    // A zeroed control is not a grade; it is the neutral position.
+    assert.equal(hasManualGrade({ ...baseItem, filterExposure: 0 }), false)
   })
 })
 

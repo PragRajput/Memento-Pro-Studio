@@ -16,10 +16,17 @@ import {
 import type { AudioCodec, InputAudioTrack, InputVideoTrack, VideoCodec, VideoSample } from 'mediabunny'
 import { applyAudioEffectNodes } from '../audioEffects.ts'
 import { getCssFilter } from '../filters.ts'
+import { drawOverlays, overlayFrameFromBitmap, pipSourceTime } from '../overlayDraw.ts'
+import type { OverlayFrame } from '../overlayDraw.ts'
 import { drawTextOverlays } from '../textDraw.ts'
-import { clamp, itemLength, locate } from '../timeline.ts'
-import { locateTransition } from '../transitionTimeline.ts'
-import type { AspectRatio, AudioClip, AudioEffectType, AudioTimelineItem, MediaClip, TextOverlay, TimelineItem, Transition, TransitionType } from '../types.ts'
+import { loadTitleFonts } from '../textStyle.ts'
+import { keyframeTimes } from '../keyframes.ts'
+import { clamp, itemLength, locate, timelineDuration, itemStarts } from '../timeline.ts'
+import { applyTransformToContext, blendModeToComposite, evaluateTransform, evaluateVolume } from '../transform.ts'
+import type { EvaluatedTransform } from '../transform.ts'
+import { getEffectiveTransitionDuration, locateTransition, transitionAudioGains } from '../transitionTimeline.ts'
+import { activeLayersAt, layerSourceTime, videoLayerEnd, videoLayersDuration } from '../videoLayers.ts'
+import type { AspectRatio, AudioClip, AudioEffectType, AudioTimelineItem, Keyframe, MediaClip, OverlayItem, TextOverlay, TimelineItem, Transition, TransitionType, VideoLayerItem } from '../types.ts'
 import { outputSizeForAspectRatio, planFrames } from './plan.ts'
 import type { Size } from './plan.ts'
 
@@ -88,13 +95,25 @@ export async function exportTimeline(
   textItems: readonly TextOverlay[] = [],
   transitions: readonly Transition[] = [],
   aspectRatio: AspectRatio = '16:9',
+  overlayItems: readonly OverlayItem[] = [],
+  videoLayers: readonly VideoLayerItem[] = [],
   { signal, onProgress }: ExportOptions = {},
 ): Promise<ExportResult> {
   if (items.length === 0) throw new Error('Add clips to the timeline before exporting.')
   const firstClip = clips.get(items[0].clipId)
   if (firstClip === undefined) throw new Error('A timeline clip is missing from the Media panel.')
 
-  const plan = planFrames(items, EXPORT_FPS)
+  const videoDuration = timelineDuration(items)
+  const layerDuration = videoLayersDuration(videoLayers)
+  const audioDuration =
+    audioItems.length > 0 ? Math.max(...audioItems.map((item) => item.start + itemLength(item))) : 0
+  const textDuration =
+    textItems.length > 0 ? Math.max(...textItems.map((item) => item.start + item.duration)) : 0
+  const overlayDuration =
+    overlayItems.length > 0 ? Math.max(...overlayItems.map((item) => item.start + item.duration)) : 0
+  const totalExportDuration = Math.max(videoDuration, audioDuration, textDuration, overlayDuration, layerDuration)
+
+  const plan = planFrames(items, EXPORT_FPS, totalExportDuration)
   const size = outputSizeForAspectRatio(aspectRatio, firstClip)
   const notes: string[] = []
   const report = progressReporter(onProgress)
@@ -118,7 +137,15 @@ export async function exportTimeline(
   try {
     signal?.throwIfAborted()
     report('Preparing', 0)
-    for (const clipId of new Set(items.map((item) => item.clipId))) {
+    const mediaOverlayClipIds = overlayItems
+      .filter((o) => o.category === 'media' && o.clipId)
+      .map((o) => o.clipId!)
+    const allVideoClipIds = new Set([
+      ...items.map((item) => item.clipId),
+      ...mediaOverlayClipIds,
+      ...videoLayers.map((layer) => layer.clipId),
+    ])
+    for (const clipId of allVideoClipIds) {
       const clip = clips.get(clipId)
       if (clip === undefined) throw new Error('A timeline clip is missing from the Media panel.')
       opened.set(clipId, await openVideoClip(clip, notes))
@@ -142,6 +169,11 @@ export async function exportTimeline(
       items.some((item) => {
         if (item.muted) return false
         const open = opened.get(item.clipId)
+        return open !== undefined && open.audio !== null
+      }) ||
+      videoLayers.some((layer) => {
+        if (layer.muted) return false
+        const open = opened.get(layer.clipId)
         return open !== undefined && open.audio !== null
       }) ||
       audioItems.some((item) => openedAudio.get(item.clipId)!.audio !== null)
@@ -175,25 +207,59 @@ export async function exportTimeline(
     await output.start()
 
     if (audioSource !== null) {
-      await mixTimelineAudio(items, opened, audioItems, openedAudio, plan.duration, audioSource, signal, (fraction) =>
+      await mixTimelineAudio(items, opened, audioItems, openedAudio, videoLayers, transitions, clips, plan.duration, audioSource, signal, (fraction) =>
         report('Mixing audio', 0.1 * fraction),
       )
       audioSource.close()
     }
-    if ('fonts' in document) {
-      await (document as unknown as { fonts: { ready: Promise<void> } }).fonts.ready
+    // Explicitly fetch the faces these titles use. `document.fonts.ready` alone
+    // resolves with nothing loaded, which silently exported the fallback font.
+    await loadTitleFonts(textItems)
+
+    // Stills are shared by clip id; videos decode per overlay, below.
+    const overlayStills = new Map<string, OverlayFrame>()
+    for (const [clipId, open] of opened.entries()) {
+      if (open.image) {
+        overlayStills.set(clipId, overlayFrameFromBitmap(open.image))
+      }
     }
+    const overlayIterators = openOverlayIterators(overlayItems, opened, plan.frameCount)
+
+    /** Draw the overlay stack for one frame, decoding any video PiP it needs. */
+    const paintOverlays = async (time: number) => {
+      const { frames, samples } = await nextOverlayFrames(overlayItems, time, overlayIterators)
+      try {
+        drawOverlays(context, overlayItems, time, size, {
+          byOverlayId: frames,
+          byClipId: overlayStills,
+        })
+      } finally {
+        for (const sample of samples) sample.close()
+      }
+    }
+
+    const layerIterators = openLayerIterators(videoLayers, opened, plan.frameCount)
 
     let framesDone = 0
     if (transitions.length === 0) {
       for (const group of plan.items) {
         const open = opened.get(items[group.itemIndex].clipId)!
         let frame = group.firstFrame
+        const item = items[group.itemIndex]
         if (open.image) {
+          const bitmap = open.image
           for (let i = 0; i < group.sourceTimes.length; i++) {
             context.fillStyle = '#000'
             context.fillRect(0, 0, size.width, size.height)
-            drawImageWithFit(context, open.image, size)
+            drawVisual(
+              context,
+              { kind: 'image', bitmap, width: open.clip.width ?? bitmap.width, height: open.clip.height ?? bitmap.height },
+              size,
+              item,
+              evaluateTransform(item, (frame - group.firstFrame) / EXPORT_FPS),
+            )
+            await drawVideoLayers(context, size, videoLayers, frame / EXPORT_FPS, opened, layerIterators)
+            await paintOverlays(frame / EXPORT_FPS)
             drawTextOverlays(context, textItems, frame / EXPORT_FPS, size)
             signal?.throwIfAborted()
             await videoSource.add(frame / EXPORT_FPS, 1 / EXPORT_FPS)
@@ -208,11 +274,19 @@ export async function exportTimeline(
             context.fillRect(0, 0, size.width, size.height)
             if (sample !== null) {
               try {
-                sample.drawWithFit(context, { fit: 'contain' })
+                drawVisual(
+                  context,
+                  { kind: 'video', sample },
+                  size,
+                  item,
+                  evaluateTransform(item, (frame - group.firstFrame) / EXPORT_FPS),
+                )
               } finally {
                 sample.close()
               }
             }
+            await drawVideoLayers(context, size, videoLayers, frame / EXPORT_FPS, opened, layerIterators)
+            await paintOverlays(frame / EXPORT_FPS)
             drawTextOverlays(context, textItems, frame / EXPORT_FPS, size)
             signal?.throwIfAborted()
             await videoSource.add(frame / EXPORT_FPS, 1 / EXPORT_FPS)
@@ -221,6 +295,18 @@ export async function exportTimeline(
             report('Rendering video', 0.1 + 0.88 * (framesDone / plan.frameCount))
           }
         }
+      }
+      while (framesDone < plan.frameCount) {
+        context.fillStyle = '#000'
+        context.fillRect(0, 0, size.width, size.height)
+        const frameTime = framesDone / EXPORT_FPS
+        await drawVideoLayers(context, size, videoLayers, frameTime, opened, layerIterators)
+        await paintOverlays(frameTime)
+        drawTextOverlays(context, textItems, frameTime, size)
+        signal?.throwIfAborted()
+        await videoSource.add(frameTime, 1 / EXPORT_FPS)
+        framesDone += 1
+        report('Rendering video', 0.1 + 0.88 * (framesDone / plan.frameCount))
       }
     } else {
       // Transition-aware rendering: collect monotonic timestamps needed from each video clip
@@ -234,7 +320,7 @@ export async function exportTimeline(
 
       for (let frame = 0; frame < plan.frameCount; frame++) {
         const t = frame / EXPORT_FPS
-        const active = locateTransition(items, transitions, t)
+        const active = locateTransition(items, transitions, t, clips)
         if (active !== null) {
           const listA = clipTimestamps.get(active.itemA.clipId)
           if (listA) listA.push(active.sourceTimeA + FRAME_EPSILON)
@@ -245,7 +331,7 @@ export async function exportTimeline(
           if (pos !== null) {
             const item = items[pos.index]
             const list = clipTimestamps.get(item.clipId)
-            if (list) list.push(item.inPoint + pos.offset + FRAME_EPSILON)
+            if (list) list.push(item.inPoint + pos.offset * (item.speed ?? 1) + FRAME_EPSILON)
           }
         }
       }
@@ -264,13 +350,24 @@ export async function exportTimeline(
         context.fillRect(0, 0, size.width, size.height)
 
         const t = frame / EXPORT_FPS
-        const active = locateTransition(items, transitions, t)
+        const active = locateTransition(items, transitions, t, clips)
 
         if (active !== null) {
           const visualA = await getVisualForClip(active.itemA.clipId, iterators, opened)
           const visualB = await getVisualForClip(active.itemB.clipId, iterators, opened)
           try {
-            drawTransitionFrame(context, size, visualA, visualB, active.transition.type, active.progress, active.itemA, active.itemB)
+            drawTransitionFrame(
+              context,
+              size,
+              visualA,
+              visualB,
+              active.transition.type,
+              active.easedProgress,
+              active.itemA,
+              active.itemB,
+              evaluateTransform(active.itemA, active.sourceTimeA - active.itemA.inPoint),
+              evaluateTransform(active.itemB, active.sourceTimeB - active.itemB.inPoint),
+            )
           } finally {
             closeVisual(visualA)
             closeVisual(visualB)
@@ -281,13 +378,15 @@ export async function exportTimeline(
             const item = items[pos.index]
             const visual = await getVisualForClip(item.clipId, iterators, opened)
             try {
-              drawVisual(context, visual, size, item)
+              drawVisual(context, visual, size, item, evaluateTransform(item, pos.offset))
             } finally {
               closeVisual(visual)
             }
           }
         }
 
+        await drawVideoLayers(context, size, videoLayers, t, opened, layerIterators)
+        await paintOverlays(t)
         drawTextOverlays(context, textItems, t, size)
         signal?.throwIfAborted()
         await videoSource.add(t, 1 / EXPORT_FPS)
@@ -369,13 +468,16 @@ async function mixTimelineAudio(
   opened: ReadonlyMap<string, OpenVideoClip>,
   audioItems: readonly AudioTimelineItem[],
   openedAudio: ReadonlyMap<string, OpenAudioClip>,
+  videoLayers: readonly VideoLayerItem[],
+  transitions: readonly Transition[],
+  clips: ReadonlyMap<string, MediaClip>,
   duration: number,
   audioSource: AudioBufferSource,
   signal: AbortSignal | undefined,
   onFraction: (fraction: number) => void,
 ) {
   const totalFrames = Math.round(duration * SAMPLE_RATE)
-  const breakpoints = collectBreakpoints(items, audioItems, duration)
+  const breakpoints = collectBreakpoints(items, audioItems, videoLayers, transitions, duration)
   let written = 0
 
   for (let index = 1; index < breakpoints.length; index++) {
@@ -389,15 +491,30 @@ async function mixTimelineAudio(
     const resolveTime = spanStart + BREAKPOINT_EPSILON
     const contributions: AudioContribution[] = []
 
-    const videoPosition = locate(items, resolveTime)
-    const videoItem = videoPosition === null ? null : items[videoPosition.index]
-    const videoOpen = videoItem === null ? null : opened.get(videoItem.clipId)!
-    if (videoItem !== null && !videoItem.muted && videoOpen !== null && videoOpen.audio !== null) {
-      contributions.push({
-        track: videoOpen.audio,
-        sourceStart: videoItem.inPoint + videoPosition!.offset * (videoItem.speed ?? 1),
-        gain: 1,
-      })
+    // Inside a transition both clips are audible, blended on the same curve as
+    // the picture; outside one, the single clip under the playhead plays flat.
+    const activeTransition = locateTransition(items, transitions, resolveTime, clips)
+    if (activeTransition !== null) {
+      const gains = transitionAudioGains(activeTransition.transition, activeTransition.progress)
+      for (const [item, sourceTime, gain] of [
+        [activeTransition.itemA, activeTransition.sourceTimeA, gains.a],
+        [activeTransition.itemB, activeTransition.sourceTimeB, gains.b],
+      ] as const) {
+        const open = opened.get(item.clipId)
+        if (item.muted || open === undefined || open.audio === null || gain <= 0) continue
+        contributions.push({ track: open.audio, sourceStart: sourceTime, gain: clamp(gain, 0, 1) })
+      }
+    } else {
+      const videoPosition = locate(items, resolveTime)
+      const videoItem = videoPosition === null ? null : items[videoPosition.index]
+      const videoOpen = videoItem === null ? null : opened.get(videoItem.clipId)!
+      if (videoItem !== null && !videoItem.muted && videoOpen !== null && videoOpen.audio !== null) {
+        contributions.push({
+          track: videoOpen.audio,
+          sourceStart: videoItem.inPoint + videoPosition!.offset * (videoItem.speed ?? 1),
+          gain: 1,
+        })
+      }
     }
 
     // Collect all active parallel audio tracks at this point in time
@@ -425,12 +542,27 @@ async function mixTimelineAudio(
         contributions.push({
           track: audioOpen.audio,
           sourceStart: audioItem.inPoint + (spanStart - audioItem.start) * speed,
-          gain: clamp(audioItem.volume * fadeMultiplier, 0, 1),
+          gain: clamp(evaluateVolume(audioItem.keyframes, audioItem.volume, offset) * fadeMultiplier, 0, 1),
           effect: audioItem.effect,
           effectIntensity: audioItem.effectIntensity,
           speed,
         })
       }
+    }
+
+    // Video layers above the base track contribute their own sound when unmuted.
+    for (const layer of videoLayers) {
+      if (layer.muted) continue
+      if (resolveTime < layer.start || resolveTime >= videoLayerEnd(layer)) continue
+      const layerOpen = opened.get(layer.clipId)
+      if (layerOpen === undefined || layerOpen.audio === null) continue
+      const speed = layer.speed ?? 1
+      contributions.push({
+        track: layerOpen.audio,
+        sourceStart: layer.inPoint + (spanStart - layer.start) * speed,
+        gain: clamp(evaluateVolume(layer.keyframes, layer.volume ?? 1, resolveTime - layer.start), 0, 1),
+        speed,
+      })
     }
 
     const buffer = await renderSpan(contributions, frames, signal)
@@ -444,6 +576,8 @@ async function mixTimelineAudio(
 function collectBreakpoints(
   items: readonly TimelineItem[],
   audioItems: readonly AudioTimelineItem[],
+  videoLayers: readonly VideoLayerItem[],
+  transitions: readonly Transition[],
   duration: number,
 ): number[] {
   const points = new Set<number>([0, duration])
@@ -468,13 +602,56 @@ function collectBreakpoints(
       points.add(clampToRange(item.start + len - item.fadeOut, 0, duration))
     }
     points.add(clampToRange(item.start + len, 0, duration))
+    for (const time of automationPoints(item.keyframes?.volume)) {
+      points.add(clampToRange(item.start + time, 0, duration))
+    }
   }
+  for (const layer of videoLayers) {
+    if (layer.muted) continue
+    points.add(clampToRange(layer.start, 0, duration))
+    points.add(clampToRange(videoLayerEnd(layer), 0, duration))
+    for (const time of automationPoints(layer.keyframes?.volume)) {
+      points.add(clampToRange(layer.start + time, 0, duration))
+    }
+  }
+  // An audio crossfade changes continuously across a transition, so the window
+  // needs points along it, not just at its edges, or the blend renders as a step.
+  const starts = itemStarts(items)
+  for (let i = 0; i < items.length - 1; i++) {
+    const transition = transitions.find(
+      (candidate) => candidate.fromItemId === items[i].id && candidate.toItemId === items[i + 1].id,
+    )
+    if (transition === undefined) continue
+    const half = getEffectiveTransitionDuration(transition, items[i], items[i + 1]) / 2
+    for (let offset = -half; offset <= half + 1e-9; offset += AUTOMATION_STEP) {
+      points.add(clampToRange(starts[i + 1] + offset, 0, duration))
+    }
+    points.add(clampToRange(starts[i + 1] + half, 0, duration))
+  }
+
   const sorted = [...points].sort((a, b) => a - b)
   return sorted.filter((value, index) => index === 0 || value - sorted[index - 1] > BREAKPOINT_EPSILON)
 }
 
 function clampToRange(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
+}
+
+/** How finely a keyframed volume ramp is sampled, in seconds. */
+const AUTOMATION_STEP = 0.1
+
+/**
+ * Times a volume track must be re-evaluated at. Gain is constant within a mixing
+ * span, so a ramp needs points along it, not just at its keyframes, or it steps.
+ */
+function automationPoints(frames: readonly Keyframe[] | undefined): number[] {
+  const times = keyframeTimes(frames ? { volume: [...frames] } : undefined)
+  if (times.length < 2) return times
+  const points = new Set(times)
+  for (let time = times[0]; time < times[times.length - 1]; time += AUTOMATION_STEP) {
+    points.add(Math.round(time * 1000) / 1000)
+  }
+  return [...points].sort((a, b) => a - b)
 }
 
 interface AudioContribution {
@@ -616,13 +793,21 @@ function drawVisual(
   context: CanvasRenderingContext2D,
   visual: RenderableVisual | null,
   size: Size,
-  item?: TimelineItem | null,
+  item?: (TimelineItem | VideoLayerItem) | null,
+  transform?: EvaluatedTransform,
 ) {
   if (!visual) return
   context.save()
 
+  // Animated transform sits outside the clip's own orientation, so a keyed
+  // rotation spins the already-upright picture rather than the raw footage.
+  if (transform) {
+    context.globalAlpha *= clamp(transform.opacity, 0, 1)
+    applyTransformToContext(context, transform, size.width, size.height)
+  }
+
   // Apply CSS filter if available
-  const filter = getCssFilter(item?.filter, item?.filterIntensity)
+  const filter = getCssFilter(item?.filter, item?.filterIntensity, item)
   if (filter && filter !== 'none' && 'filter' in context) {
     const existing = context.filter && context.filter !== 'none' ? context.filter : ''
     context.filter = existing ? `${existing} ${filter}` : filter
@@ -683,6 +868,139 @@ async function getVisualForClip(
   return { kind: 'video', sample }
 }
 
+/**
+ * One decoding iterator per layer item, keyed by item id rather than clip id:
+ * the same clip may sit on several layers at once, and each needs its own
+ * monotonically advancing read through the source.
+ */
+function openLayerIterators(
+  videoLayers: readonly VideoLayerItem[],
+  opened: ReadonlyMap<string, OpenVideoClip>,
+  frameCount: number,
+): Map<string, AsyncIterator<VideoSample | null>> {
+  const iterators = new Map<string, AsyncIterator<VideoSample | null>>()
+  for (const layer of videoLayers) {
+    const open = opened.get(layer.clipId)
+    if (open?.video === null || open?.video === undefined) continue
+    const times: number[] = []
+    const end = videoLayerEnd(layer)
+    for (let frame = 0; frame < frameCount; frame++) {
+      const time = frame / EXPORT_FPS
+      if (time < layer.start || time >= end) continue
+      times.push(layerSourceTime(layer, time) + FRAME_EPSILON)
+    }
+    if (times.length === 0) continue
+    iterators.set(
+      layer.id,
+      new VideoSampleSink(open.video).samplesAtTimestamps(times)[Symbol.asyncIterator](),
+    )
+  }
+  return iterators
+}
+
+/**
+ * One decoding iterator per picture-in-picture overlay backed by a video, keyed
+ * by overlay id because the same clip can be used by several overlays at once.
+ */
+function openOverlayIterators(
+  overlayItems: readonly OverlayItem[],
+  opened: ReadonlyMap<string, OpenVideoClip>,
+  frameCount: number,
+): Map<string, AsyncIterator<VideoSample | null>> {
+  const iterators = new Map<string, AsyncIterator<VideoSample | null>>()
+  for (const item of overlayItems) {
+    if (item.category !== 'media' || item.clipId === undefined) continue
+    const open = opened.get(item.clipId)
+    // Stills are shared through the bitmap map; only videos need decoding here.
+    if (open?.video === null || open?.video === undefined || open.image) continue
+    const times: number[] = []
+    const end = item.start + item.duration
+    for (let frame = 0; frame < frameCount; frame++) {
+      const time = frame / EXPORT_FPS
+      if (time < item.start || time >= end) continue
+      times.push(pipSourceTime(item, time) + FRAME_EPSILON)
+    }
+    if (times.length === 0) continue
+    iterators.set(
+      item.id,
+      new VideoSampleSink(open.video).samplesAtTimestamps(times)[Symbol.asyncIterator](),
+    )
+  }
+  return iterators
+}
+
+/**
+ * Decode this frame's picture for every active video PiP. Returned samples must
+ * be closed by the caller once the overlay has been drawn.
+ */
+async function nextOverlayFrames(
+  overlayItems: readonly OverlayItem[],
+  time: number,
+  iterators: Map<string, AsyncIterator<VideoSample | null>>,
+): Promise<{ frames: Map<string, OverlayFrame>; samples: VideoSample[] }> {
+  const frames = new Map<string, OverlayFrame>()
+  const samples: VideoSample[] = []
+  for (const item of overlayItems) {
+    const iterator = iterators.get(item.id)
+    if (iterator === undefined) continue
+    if (time < item.start || time >= item.start + item.duration) continue
+    // Advance in lockstep with the timestamps planned for this overlay.
+    const sample = (await iterator.next()).value ?? null
+    if (sample === null) continue
+    samples.push(sample)
+    frames.set(item.id, {
+      width: sample.displayWidth,
+      height: sample.displayHeight,
+      draw: (context, dx, dy, dWidth, dHeight) => sample.draw(context, dx, dy, dWidth, dHeight),
+    })
+  }
+  return { frames, samples }
+}
+
+/** Composite every layer covering `time` over whatever the base track drew. */
+async function drawVideoLayers(
+  context: CanvasRenderingContext2D,
+  size: Size,
+  videoLayers: readonly VideoLayerItem[],
+  time: number,
+  opened: ReadonlyMap<string, OpenVideoClip>,
+  iterators: Map<string, AsyncIterator<VideoSample | null>>,
+) {
+  for (const layer of activeLayersAt(videoLayers, time)) {
+    const open = opened.get(layer.clipId)
+    if (open === undefined) continue
+
+    let visual: RenderableVisual | null = null
+    if (open.image) {
+      visual = {
+        kind: 'image',
+        bitmap: open.image,
+        width: open.clip.width ?? open.image.width,
+        height: open.clip.height ?? open.image.height,
+      }
+    } else {
+      // Pull a frame even when the layer ends up invisible, so this iterator
+      // stays in step with the frame loop that planned its timestamps.
+      const iterator = iterators.get(layer.id)
+      const sample = iterator === undefined ? null : ((await iterator.next()).value ?? null)
+      if (sample !== null) visual = { kind: 'video', sample }
+    }
+    if (visual === null) continue
+
+    try {
+      const transform = evaluateTransform(layer, time - layer.start)
+      if (transform.opacity > 0.001) {
+        context.save()
+        context.globalCompositeOperation = blendModeToComposite(layer.blendMode)
+        drawVisual(context, visual, size, layer, transform)
+        context.restore()
+      }
+    } finally {
+      closeVisual(visual)
+    }
+  }
+}
+
 function drawTransitionFrame(
   context: CanvasRenderingContext2D,
   size: Size,
@@ -692,37 +1010,39 @@ function drawTransitionFrame(
   progress: number,
   itemA?: TimelineItem | null,
   itemB?: TimelineItem | null,
+  transformA?: EvaluatedTransform,
+  transformB?: EvaluatedTransform,
 ) {
   const p = clamp(progress, 0, 1)
 
   if (type === 'crossfade') {
     if (visualA !== null) {
       context.globalAlpha = 1.0
-      drawVisual(context, visualA, size, itemA)
+      drawVisual(context, visualA, size, itemA, transformA)
     }
     if (visualB !== null) {
       context.globalAlpha = p
-      drawVisual(context, visualB, size, itemB)
+      drawVisual(context, visualB, size, itemB, transformB)
       context.globalAlpha = 1.0
     }
   } else if (type === 'fade-black') {
     if (p < 0.5) {
       if (visualA !== null) {
         context.globalAlpha = clamp(1 - p * 2, 0, 1)
-        drawVisual(context, visualA, size, itemA)
+        drawVisual(context, visualA, size, itemA, transformA)
         context.globalAlpha = 1.0
       }
     } else {
       if (visualB !== null) {
         context.globalAlpha = clamp((p - 0.5) * 2, 0, 1)
-        drawVisual(context, visualB, size, itemB)
+        drawVisual(context, visualB, size, itemB, transformB)
         context.globalAlpha = 1.0
       }
     }
   } else if (type === 'fade-white') {
     if (p < 0.5) {
       if (visualA !== null) {
-        drawVisual(context, visualA, size, itemA)
+        drawVisual(context, visualA, size, itemA, transformA)
       }
       context.fillStyle = '#ffffff'
       context.globalAlpha = p * 2
@@ -730,7 +1050,7 @@ function drawTransitionFrame(
       context.globalAlpha = 1.0
     } else {
       if (visualB !== null) {
-        drawVisual(context, visualB, size, itemB)
+        drawVisual(context, visualB, size, itemB, transformB)
       }
       context.fillStyle = '#ffffff'
       context.globalAlpha = (1 - p) * 2
@@ -739,76 +1059,76 @@ function drawTransitionFrame(
     }
   } else if (type === 'wipe-left') {
     if (visualA !== null) {
-      drawVisual(context, visualA, size, itemA)
+      drawVisual(context, visualA, size, itemA, transformA)
     }
     if (visualB !== null) {
       context.save()
       context.beginPath()
       context.rect(0, 0, size.width * p, size.height)
       context.clip()
-      drawVisual(context, visualB, size, itemB)
+      drawVisual(context, visualB, size, itemB, transformB)
       context.restore()
     }
   } else if (type === 'wipe-right') {
     if (visualA !== null) {
-      drawVisual(context, visualA, size, itemA)
+      drawVisual(context, visualA, size, itemA, transformA)
     }
     if (visualB !== null) {
       context.save()
       context.beginPath()
       context.rect(size.width * (1 - p), 0, size.width * p, size.height)
       context.clip()
-      drawVisual(context, visualB, size, itemB)
+      drawVisual(context, visualB, size, itemB, transformB)
       context.restore()
     }
   } else if (type === 'wipe-up') {
     if (visualA !== null) {
-      drawVisual(context, visualA, size, itemA)
+      drawVisual(context, visualA, size, itemA, transformA)
     }
     if (visualB !== null) {
       context.save()
       context.beginPath()
       context.rect(0, 0, size.width, size.height * p)
       context.clip()
-      drawVisual(context, visualB, size, itemB)
+      drawVisual(context, visualB, size, itemB, transformB)
       context.restore()
     }
   } else if (type === 'wipe-down') {
     if (visualA !== null) {
-      drawVisual(context, visualA, size, itemA)
+      drawVisual(context, visualA, size, itemA, transformA)
     }
     if (visualB !== null) {
       context.save()
       context.beginPath()
       context.rect(0, size.height * (1 - p), size.width, size.height * p)
       context.clip()
-      drawVisual(context, visualB, size, itemB)
+      drawVisual(context, visualB, size, itemB, transformB)
       context.restore()
     }
   } else if (type === 'slide-left') {
     if (visualA !== null) {
       context.save()
       context.translate(-size.width * p, 0)
-      drawVisual(context, visualA, size, itemA)
+      drawVisual(context, visualA, size, itemA, transformA)
       context.restore()
     }
     if (visualB !== null) {
       context.save()
       context.translate(size.width * (1 - p), 0)
-      drawVisual(context, visualB, size, itemB)
+      drawVisual(context, visualB, size, itemB, transformB)
       context.restore()
     }
   } else if (type === 'slide-right') {
     if (visualA !== null) {
       context.save()
       context.translate(size.width * p, 0)
-      drawVisual(context, visualA, size, itemA)
+      drawVisual(context, visualA, size, itemA, transformA)
       context.restore()
     }
     if (visualB !== null) {
       context.save()
       context.translate(-size.width * (1 - p), 0)
-      drawVisual(context, visualB, size, itemB)
+      drawVisual(context, visualB, size, itemB, transformB)
       context.restore()
     }
   } else if (type === 'zoom-in') {
@@ -821,7 +1141,7 @@ function drawTransitionFrame(
       context.translate(cx, cy)
       context.scale(scaleA, scaleA)
       context.translate(-cx, -cy)
-      drawVisual(context, visualA, size, itemA)
+      drawVisual(context, visualA, size, itemA, transformA)
       context.restore()
     }
     if (visualB !== null) {
@@ -831,7 +1151,7 @@ function drawTransitionFrame(
       context.translate(cx, cy)
       context.scale(scaleB, scaleB)
       context.translate(-cx, -cy)
-      drawVisual(context, visualB, size, itemB)
+      drawVisual(context, visualB, size, itemB, transformB)
       context.restore()
     }
   } else if (type === 'zoom-out') {
@@ -844,7 +1164,7 @@ function drawTransitionFrame(
       context.translate(cx, cy)
       context.scale(scaleA, scaleA)
       context.translate(-cx, -cy)
-      drawVisual(context, visualA, size, itemA)
+      drawVisual(context, visualA, size, itemA, transformA)
       context.restore()
     }
     if (visualB !== null) {
@@ -854,12 +1174,12 @@ function drawTransitionFrame(
       context.translate(cx, cy)
       context.scale(scaleB, scaleB)
       context.translate(-cx, -cy)
-      drawVisual(context, visualB, size, itemB)
+      drawVisual(context, visualB, size, itemB, transformB)
       context.restore()
     }
   } else if (type === 'iris-circle') {
     if (visualA !== null) {
-      drawVisual(context, visualA, size, itemA)
+      drawVisual(context, visualA, size, itemA, transformA)
     }
     if (visualB !== null) {
       const cx = size.width / 2
@@ -869,7 +1189,7 @@ function drawTransitionFrame(
       context.beginPath()
       context.arc(cx, cy, maxRadius * p, 0, Math.PI * 2)
       context.clip()
-      drawVisual(context, visualB, size, itemB)
+      drawVisual(context, visualB, size, itemB, transformB)
       context.restore()
     }
   } else if (type === 'blur-dissolve') {
@@ -880,7 +1200,7 @@ function drawTransitionFrame(
       if (p > 0.01 && 'filter' in context) {
         context.filter = `blur(${(p * maxBlur).toFixed(1)}px)`
       }
-      drawVisual(context, visualA, size, itemA)
+      drawVisual(context, visualA, size, itemA, transformA)
       context.restore()
     }
     if (visualB !== null) {
@@ -889,7 +1209,7 @@ function drawTransitionFrame(
       if (1 - p > 0.01 && 'filter' in context) {
         context.filter = `blur(${((1 - p) * maxBlur).toFixed(1)}px)`
       }
-      drawVisual(context, visualB, size, itemB)
+      drawVisual(context, visualB, size, itemB, transformB)
       context.restore()
     }
   }

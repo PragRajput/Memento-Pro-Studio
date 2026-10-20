@@ -60,10 +60,12 @@ export interface FramePlan {
 }
 
 /** Assign every output frame to the item under its timeline time; frame n shows time n / fps. */
-export function planFrames(items: readonly TimelineItem[], fps: number): FramePlan {
-  const frameCount = Math.max(1, Math.round(timelineDuration(items) * fps))
+export function planFrames(items: readonly TimelineItem[], fps: number, totalDuration?: number): FramePlan {
+  const duration = Math.max(timelineDuration(items), totalDuration ?? 0)
+  const frameCount = Math.max(1, Math.round(duration * fps))
+  const videoFrames = Math.round(timelineDuration(items) * fps)
   const groups: ItemFrames[] = []
-  for (let frame = 0; frame < frameCount; frame++) {
+  for (let frame = 0; frame < videoFrames; frame++) {
     const position = locate(items, frame / fps)
     if (position === null) break
     const item = items[position.index]

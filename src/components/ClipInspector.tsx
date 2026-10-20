@@ -1,5 +1,11 @@
 import { FILTER_PRESETS } from '../filters.ts'
-import type { MediaClip, TimelineItem } from '../types.ts'
+import { clearTrack } from '../keyframes.ts'
+import { itemLength } from '../timeline.ts'
+import { KeyframeEditor } from './KeyframeEditor.tsx'
+import type { AnimatableProperty, EasingType, MediaClip, TimelineItem } from '../types.ts'
+
+/** A base-track clip animates its picture; its sound level lives on the audio lanes. */
+const CLIP_PROPERTIES: readonly AnimatableProperty[] = ['posX', 'posY', 'scale', 'rotate', 'opacity']
 
 interface ClipInspectorProps {
   item: TimelineItem
@@ -7,6 +13,12 @@ interface ClipInspectorProps {
   onChange: (updated: TimelineItem) => void
   onDelete: (id: string) => void
   onClose: () => void
+  /** Seconds from this clip's start to the playhead. */
+  localTime?: number
+  onAddKeyframe?: (property: AnimatableProperty, value: number) => void
+  onRemoveKeyframe?: (property: AnimatableProperty, keyframeId: string) => void
+  onChangeEasing?: (property: AnimatableProperty, keyframeId: string, easing: EasingType) => void
+  onSeekToLocalTime?: (localTime: number) => void
 }
 
 const SPEED_PRESETS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4]
@@ -17,6 +29,11 @@ export function ClipInspector({
   onChange,
   onDelete,
   onClose,
+  localTime = 0,
+  onAddKeyframe,
+  onRemoveKeyframe,
+  onChangeEasing,
+  onSeekToLocalTime,
 }: ClipInspectorProps) {
   const currentSpeed = item.speed ?? 1
   const currentFilter = item.filter ?? 'none'
@@ -48,6 +65,32 @@ export function ClipInspector({
       </div>
 
       <div className="inspector-scroll-body">
+        {onAddKeyframe && onRemoveKeyframe && onChangeEasing && onSeekToLocalTime && (
+          <section className="inspector-section">
+            <KeyframeEditor
+              tracks={item.keyframes}
+              statics={{
+                posX: item.posX,
+                posY: item.posY,
+                scale: item.scale,
+                rotate: item.rotate,
+                opacity: item.opacity,
+              }}
+              localTime={localTime}
+              itemLength={itemLength(item)}
+              properties={CLIP_PROPERTIES}
+              onSetStatic={(property, value) => onChange({ ...item, [property]: value })}
+              onAddKeyframe={onAddKeyframe}
+              onRemoveKeyframe={onRemoveKeyframe}
+              onChangeEasing={onChangeEasing}
+              onClearTrack={(property) =>
+                onChange({ ...item, keyframes: clearTrack(item.keyframes, property) })
+              }
+              onSeekTo={onSeekToLocalTime}
+            />
+          </section>
+        )}
+
         {/* Playback Speed */}
         <section className="inspector-section">
           <div className="section-header-row">
@@ -205,3 +248,4 @@ export function ClipInspector({
     </div>
   )
 }
+

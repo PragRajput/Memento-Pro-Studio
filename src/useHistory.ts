@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AspectRatio, AudioTimelineItem, TextOverlay, TimelineItem, Transition } from './types.ts'
+import type { AspectRatio, AudioTimelineItem, OverlayItem, TextOverlay, TimelineItem, Transition, VideoLayerItem } from './types.ts'
 
 export interface HistorySnapshot {
   items: TimelineItem[]
   audioItems: AudioTimelineItem[]
   textItems: TextOverlay[]
+  overlayItems?: OverlayItem[]
+  videoLayers?: VideoLayerItem[]
   transitions: Transition[]
   aspectRatio: AspectRatio
 }
@@ -53,14 +55,22 @@ export function useHistory(
     const currJson = JSON.stringify(currentState)
     if (prevJson === currJson) return
 
+    // Keep `previousRef` pinned to the state from before this whole run of edits
+    // (not just the one before this latest change) until a snapshot actually
+    // commits. Advancing it on every intermediate change here, as a rapid sequence
+    // like a drag produces, would make each commit capture only the state one tiny
+    // step back from the end of the gesture instead of the state from before it
+    // started, so Undo would barely move.
     const snapshotToSave = previousRef.current
     window.clearTimeout(debounceTimerRef.current)
     debounceTimerRef.current = window.setTimeout(() => {
       setPast((prev) => [...prev.slice(-MAX_HISTORY + 1), snapshotToSave])
       setFuture([])
+      // Each edit replaces the previous (cancelled) timer with a new one closing
+      // over that render's `currentState`, so only the final, surviving timer's
+      // closure — the state as of the end of this run of edits — ever runs here.
+      previousRef.current = currentState
     }, 250)
-
-    previousRef.current = currentState
   }, [currentState, enabled])
 
   const undo = useCallback(() => {
@@ -137,3 +147,4 @@ export function useHistory(
     record,
   }
 }
+

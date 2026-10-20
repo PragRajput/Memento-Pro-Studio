@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { DragEvent, PointerEvent, RefObject } from 'react'
 import { AudioLane } from './AudioLane.tsx'
+import { OverlayLane } from './OverlayLane.tsx'
+import { VideoLayerLane } from './VideoLayerLane.tsx'
 import { TextLane } from './TextLane.tsx'
 import { AUDIO_DRAG_TYPE, CLIP_DRAG_TYPE } from '../dnd.ts'
 import { formatDuration, formatTimecode } from '../format.ts'
@@ -20,10 +22,12 @@ import type {
   AudioClip,
   AudioTimelineItem,
   MediaClip,
+  OverlayItem,
   TextOverlay,
   TimelineItem,
   Transition,
   TransitionType,
+  VideoLayerItem,
 } from '../types.ts'
 
 /** Ruler label spacing candidates, in seconds; the first that leaves room for a label wins. */
@@ -74,6 +78,22 @@ interface TimelineProps {
   onAddText: () => void
   onMoveTextItem: (id: string, start: number) => void
   onTrimTextItem: (id: string, edge: 'in' | 'out', time: number) => void
+  videoLayers?: VideoLayerItem[]
+  videoLayerCount?: number
+  selectedLayerItemId?: string | null
+  onSelectLayerItem?: (id: string | null) => void
+  onAddClipToLayer?: (clipId: string, trackIndex: number, start: number) => void
+  onMoveLayerItem?: (id: string, start: number, trackIndex?: number) => void
+  onTrimLayerItem?: (id: string, edge: 'in' | 'out', sourceTime: number) => void
+  onAddVideoLayer?: () => void
+  onRemoveVideoLayer?: (trackIndex: number) => void
+  overlayItems?: OverlayItem[]
+  selectedOverlayId?: string | null
+  onSelectOverlayItem?: (id: string | null) => void
+  onAddOverlay?: (category?: OverlayItem['category']) => void
+  onMoveOverlayItem?: (id: string, start: number) => void
+  onTrimOverlayItem?: (id: string, edge: 'in' | 'out', time: number) => void
+  onAddMediaOverlay?: (clipId: string, start: number) => void
 }
 
 interface Reorder {
@@ -122,6 +142,22 @@ export function Timeline({
   onAddText,
   onMoveTextItem,
   onTrimTextItem,
+  videoLayers = [],
+  videoLayerCount = 1,
+  selectedLayerItemId = null,
+  onSelectLayerItem,
+  onAddClipToLayer,
+  onMoveLayerItem,
+  onTrimLayerItem,
+  onAddVideoLayer,
+  onRemoveVideoLayer,
+  overlayItems = [],
+  selectedOverlayId = null,
+  onSelectOverlayItem,
+  onAddOverlay,
+  onMoveOverlayItem,
+  onTrimOverlayItem,
+  onAddMediaOverlay,
 }: TimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
@@ -129,6 +165,7 @@ export function Timeline({
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [reorder, setReorder] = useState<Reorder | null>(null)
   const [isAddTrackDragOver, setIsAddTrackDragOver] = useState(false)
+  const [showOverlayMenu, setShowOverlayMenu] = useState(false)
 
   const maxTrackInItems = audioItems.reduce((max, item) => Math.max(max, item.trackIndex ?? 0), 0)
   const trackCount = Math.max(audioTrackCount, maxTrackInItems + 1, 1)
@@ -291,10 +328,13 @@ export function Timeline({
     element.setPointerCapture(event.pointerId)
     const startX = event.clientX
     const startValue = edge === 'in' ? item.inPoint : item.outPoint
+    // A timeline-second of drag is `speed` source-seconds, since sped-up/slowed-down
+    // source time passes faster/slower than the timeline time the pixels measure.
+    const speed = item.speed ?? 1
     onSelectItem(item.id)
 
     const onMove = (move: globalThis.PointerEvent) =>
-      onTrimItem(item.id, edge, startValue + (move.clientX - startX) / pps)
+      onTrimItem(item.id, edge, startValue + ((move.clientX - startX) / pps) * speed)
     const finish = () => {
       element.removeEventListener('pointermove', onMove)
       element.removeEventListener('pointerup', finish)
@@ -373,6 +413,83 @@ export function Timeline({
             <span className="tool-icon">T</span>
             <span>+ Title</span>
           </button>
+          <div className="overlay-dropdown-wrap">
+            <button
+              type="button"
+              className="tool-btn add-overlay-btn"
+              onClick={() => setShowOverlayMenu((prev) => !prev)}
+              disabled={duration <= 0}
+              title="Add a rich overlay (Picture-in-Picture, Visual FX, Lower Third, or Color Tint)"
+            >
+              <span className="tool-icon">⧉</span>
+              <span>+ Overlay ▾</span>
+            </button>
+            {showOverlayMenu && (
+              <div className="overlay-menu-dropdown">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowOverlayMenu(false)
+                    onAddOverlay?.('media')
+                  }}
+                >
+                  <span className="overlay-menu-icon">🖼️</span>
+                  <div className="overlay-menu-text">
+                    <strong>Picture-in-Picture</strong>
+                    <small>Logo, watermark, or video</small>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowOverlayMenu(false)
+                    onAddOverlay?.('vfx')
+                  }}
+                >
+                  <span className="overlay-menu-icon">🎬</span>
+                  <div className="overlay-menu-text">
+                    <strong>Cinematic Atmosphere FX</strong>
+                    <small>Letterbox, vignette, grain, light leak</small>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowOverlayMenu(false)
+                    onAddOverlay?.('lower-third')
+                  }}
+                >
+                  <span className="overlay-menu-icon">📺</span>
+                  <div className="overlay-menu-text">
+                    <strong>Broadcast Lower Third</strong>
+                    <small>Speaker name, title, breaking ribbon</small>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowOverlayMenu(false)
+                    onAddOverlay?.('color')
+                  }}
+                >
+                  <span className="overlay-menu-icon">🎨</span>
+                  <div className="overlay-menu-text">
+                    <strong>Color Gradient Wash</strong>
+                    <small>Warm sunset, neon blend tint</small>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            className="tool-btn add-video-layer-btn"
+            onClick={() => onAddVideoLayer?.()}
+            title="Add another video layer above V1"
+          >
+            <span className="tool-icon">▣</span>
+            <span>+ Video Layer</span>
+          </button>
           <button
             type="button"
             className="tool-btn add-audio-track-btn"
@@ -390,7 +507,8 @@ export function Timeline({
               selectedItemId === null &&
               selectedAudioItemId === null &&
               selectedTextId === null &&
-              selectedTransitionId === null
+              selectedTransitionId === null &&
+              selectedOverlayId === null
             }
             title="Delete selected item (Del / Backspace)"
           >
@@ -444,6 +562,41 @@ export function Timeline({
             onMoveItem={onMoveTextItem}
             onTrimItem={onTrimTextItem}
           />
+          {overlayItems && onSelectOverlayItem && onMoveOverlayItem && onTrimOverlayItem && (
+            <OverlayLane
+              items={overlayItems}
+              mediaClips={clips}
+              selectedItemId={selectedOverlayId}
+              pixelsPerSecond={pps}
+              maxEnd={duration}
+              onSelectItem={onSelectOverlayItem}
+              onMoveItem={onMoveOverlayItem}
+              onTrimItem={onTrimOverlayItem}
+              onAddMediaOverlay={onAddMediaOverlay}
+            />
+          )}
+          {onSelectLayerItem &&
+            onAddClipToLayer &&
+            onMoveLayerItem &&
+            onTrimLayerItem &&
+            // Highest layer first, so the stack reads top-down like the picture.
+            Array.from({ length: videoLayerCount }, (_, index) => videoLayerCount - 1 - index).map(
+              (trackIndex) => (
+                <VideoLayerLane
+                  key={trackIndex}
+                  trackIndex={trackIndex}
+                  items={videoLayers}
+                  clips={clips}
+                  selectedItemId={selectedLayerItemId}
+                  pixelsPerSecond={pps}
+                  onSelectItem={onSelectLayerItem}
+                  onMoveItem={onMoveLayerItem}
+                  onTrimItem={onTrimLayerItem}
+                  onAddClip={onAddClipToLayer}
+                  onRemoveLane={trackIndex > 0 ? onRemoveVideoLayer : undefined}
+                />
+              ),
+            )}
           <div
             className="track video-track"
             ref={trackRef}
