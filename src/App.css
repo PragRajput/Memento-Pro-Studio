@@ -3512,6 +3512,18 @@ input[type='range']:active::-moz-range-thumb,
   border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
 
+.preview-vfx-curtains {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  overflow: hidden;
+}
+
+.preview-vfx-curtains .curtain-panel {
+  box-sizing: border-box;
+}
+
 .preview-vfx-fx.vfx-scanlines {
   background: repeating-linear-gradient(
     to bottom,

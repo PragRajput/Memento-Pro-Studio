@@ -706,11 +706,34 @@ function App() {
       curr.map((item) => {
         if (item.id !== id) return item
         if (edge === 'in') {
-          const newStart = Math.min(time, item.start + item.duration - 0.2)
-          const newDuration = item.duration - (newStart - item.start)
-          return { ...item, start: newStart, duration: Math.max(0.2, newDuration) }
+          const timelineEnd = item.start + item.duration
+          const minStart = Math.max(0, item.start - (item.inPoint ?? 0))
+          const maxStart = timelineEnd - 0.2
+          const newStart = Math.max(minStart, Math.min(time, maxStart))
+          const delta = newStart - item.start
+          const newDuration = timelineEnd - newStart
+          const newInPoint = Math.max(0, (item.inPoint ?? 0) + delta)
+          const newPipInPoint =
+            item.category === 'media' && item.pipInPoint !== undefined
+              ? Math.max(0, item.pipInPoint + delta * (item.pipSpeed ?? 1))
+              : item.pipInPoint
+          const totalSpan = newInPoint + newDuration
+          return {
+            ...item,
+            start: newStart,
+            duration: Math.max(0.2, newDuration),
+            inPoint: newInPoint,
+            pipInPoint: newPipInPoint,
+            vfxCurtainOpenDuration: item.vfxType === 'curtains' ? totalSpan : item.vfxCurtainOpenDuration,
+          }
         } else {
-          return { ...item, duration: Math.max(0.2, time - item.start) }
+          const newDuration = Math.max(0.2, time - item.start)
+          const totalSpan = (item.inPoint ?? 0) + newDuration
+          return {
+            ...item,
+            duration: newDuration,
+            vfxCurtainOpenDuration: item.vfxType === 'curtains' ? totalSpan : item.vfxCurtainOpenDuration,
+          }
         }
       }),
     )

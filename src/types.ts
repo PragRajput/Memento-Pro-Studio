@@ -418,13 +418,14 @@ export type VfxOverlayType =
   | 'glitch'
   | 'scanlines'
   | 'bokeh'
+  | 'curtains'
 
 export type LowerThirdStyle = 'broadcast' | 'minimal' | 'social' | 'breaking-news'
 
 export type BlendMode = 'normal' | 'screen' | 'multiply' | 'overlay' | 'soft-light'
 
 /** In/out motion shared by every overlay category. */
-export type OverlayAnimation = 'none' | 'fade' | 'slide-left' | 'slide-up' | 'wipe-right' | 'scale-pop'
+export type OverlayAnimation = 'none' | 'fade' | 'slide-left' | 'slide-up' | 'wipe-right' | 'scale-pop' | 'curtains-open'
 
 /** Mask shape for a picture-in-picture overlay. */
 export type OverlayPipShape = 'rect' | 'rounded' | 'circle'
@@ -443,6 +444,12 @@ export interface OverlayItem {
   start: number
   /** Duration in seconds */
   duration: number
+  /** Seconds trimmed off the beginning of the overlay (default 0). */
+  inPoint?: number
+  /** Playback speed multiplier (default 1). Slower speed increases timeline bar width. */
+  speed?: number
+  /** Unscaled base duration in seconds. Timeline duration is baseDuration / speed. */
+  baseDuration?: number
   /** Overall opacity from 0 to 1 (default 1) */
   opacity?: number
   /** CSS blend mode or canvas globalCompositeOperation (default 'normal') */
@@ -540,6 +547,12 @@ export interface OverlayItem {
   vfxBokehCount?: number
   /** Maximum horizontal tear bands per glitch burst, 0..6. */
   vfxGlitchSlices?: number
+  /** Curtain color; default pure black '#000000'. */
+  vfxCurtainColor?: string
+  /** Curtain accent trim/hem color; default 'transparent' (no colored border). */
+  vfxCurtainTrimColor?: string
+  /** Time in seconds to fully open from center to top/bottom. */
+  vfxCurtainOpenDuration?: number
 
   // --- Colour wash ---
   /** Distribution of the wash across the frame. */

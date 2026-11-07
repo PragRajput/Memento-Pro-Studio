@@ -43,6 +43,11 @@ export const VFX_OVERLAY_PRESETS: readonly VfxPresetInfo[] = [
     name: 'Bokeh Dust',
     description: 'Dreamy floating out-of-focus optical light circles',
   },
+  {
+    id: 'curtains',
+    name: 'Opening Curtains',
+    description: 'Theatrical stage curtains parting smoothly from center to up and down',
+  },
 ]
 
 export interface LowerThirdPresetInfo {
@@ -81,7 +86,7 @@ export function createDefaultOverlay(
   clipId?: string,
 ): OverlayItem {
   const id = crypto.randomUUID()
-  const base = { id, category, start, duration, opacity: 1, blendMode: 'normal' as const }
+  const base = { id, category, start, duration, speed: 1, baseDuration: duration, opacity: 1, blendMode: 'normal' as const }
 
   switch (category) {
     case 'media':
@@ -209,7 +214,7 @@ const CATEGORY_RANK: Record<OverlayItem['category'], number> = {
  * preview stacking by category and the export painting in array order.
  */
 /** Default length of an overlay's entrance or exit, in seconds. */
-const DEFAULT_OVERLAY_ANIM_DURATION = 0.4
+export const DEFAULT_OVERLAY_ANIM_DURATION = 0.4
 
 /** Where an overlay's entrance or exit has got to, as plain numbers both renderers can apply. */
 export interface OverlayAnimationState {
@@ -221,6 +226,8 @@ export interface OverlayAnimationState {
   scale: number
   /** Horizontal reveal, 0 to 1; 1 is fully shown. Measured across the frame. */
   reveal: number
+  /** Vertical center reveal, 0 to 1; 1 is fully parted up and down. */
+  curtainsReveal?: number
 }
 
 const NEUTRAL_ANIMATION: OverlayAnimationState = {
@@ -229,6 +236,7 @@ const NEUTRAL_ANIMATION: OverlayAnimationState = {
   offsetY: 0,
   scale: 1,
   reveal: 1,
+  curtainsReveal: 1,
 }
 
 /** `amount` is 1 when fully on screen and 0 at the far end of the animation. */
@@ -246,6 +254,8 @@ function animationShape(kind: OverlayAnimation, amount: number): OverlayAnimatio
       return { ...NEUTRAL_ANIMATION, opacity: a, scale: 0.82 + 0.18 * a }
     case 'wipe-right':
       return { ...NEUTRAL_ANIMATION, reveal: a }
+    case 'curtains-open':
+      return { ...NEUTRAL_ANIMATION, curtainsReveal: a }
     case 'none':
     default:
       return NEUTRAL_ANIMATION
@@ -266,9 +276,11 @@ function smoothstep(t: number): number {
  * cannot have its entrance and exit overlap.
  */
 export function overlayAnimationAt(item: OverlayItem, time: number): OverlayAnimationState {
-  const local = time - item.start
+  const inPoint = item.inPoint ?? 0
+  const local = Math.max(0, time - item.start) + inPoint
   if (item.duration <= 0) return NEUTRAL_ANIMATION
-  const half = item.duration / 2
+  const totalLength = item.duration + inPoint
+  const half = totalLength / 2
 
   const inKind = item.overlayAnimIn ?? 'none'
   if (inKind !== 'none') {
@@ -281,7 +293,7 @@ export function overlayAnimationAt(item: OverlayItem, time: number): OverlayAnim
   const outKind = item.overlayAnimOut ?? 'none'
   if (outKind !== 'none') {
     const outDuration = Math.min(item.overlayAnimOutDuration ?? DEFAULT_OVERLAY_ANIM_DURATION, half)
-    const remaining = item.duration - local
+    const remaining = totalLength - local
     if (outDuration > 0 && remaining < outDuration) {
       return animationShape(outKind, smoothstep(remaining / outDuration))
     }
@@ -296,7 +308,8 @@ export function isNeutralOverlayAnimation(state: OverlayAnimationState): boolean
     state.offsetX === 0 &&
     state.offsetY === 0 &&
     state.scale === 1 &&
-    state.reveal === 1
+    state.reveal === 1 &&
+    (state.curtainsReveal === undefined || state.curtainsReveal === 1)
   )
 }
 
@@ -460,6 +473,12 @@ export function drawOverlays(
       if (animation.reveal < 1) {
         context.beginPath()
         context.rect(0, 0, size.width * animation.reveal, size.height)
+        context.clip()
+      }
+      if (animation.curtainsReveal !== undefined && animation.curtainsReveal < 1) {
+        const halfH = (size.height / 2) * animation.curtainsReveal
+        context.beginPath()
+        context.rect(0, (size.height / 2) - halfH, size.width, halfH * 2)
         context.clip()
       }
       if (animation.offsetX !== 0 || animation.offsetY !== 0 || animation.scale !== 1) {
@@ -697,6 +716,83 @@ function drawVfxOverlay(
         context.beginPath()
         context.arc(ox, oy, rad, 0, Math.PI * 2)
         context.fill()
+      }
+      break
+    }
+    case 'curtains': {
+      const inPoint = item.inPoint ?? 0
+      const totalSpan = Math.max(0.2, item.duration + inPoint)
+      const localTime = Math.max(0, time - item.start) + inPoint
+      const rawProgress = Math.min(1, Math.max(0, localTime / totalSpan))
+      const openAmount = rawProgress
+      const curtainColor = item.vfxCurtainColor ?? '#000000'
+      const trimColor = item.vfxCurtainTrimColor ?? 'transparent'
+
+      const topEdge = Math.round((size.height / 2) * (1 - openAmount))
+      const bottomEdge = Math.round((size.height / 2) * (1 + openAmount))
+      const pleatWidth = Math.max(20, Math.round(36 * (size.width / 1280)))
+      const trimHeight = Math.max(2, Math.round(4 * (size.height / 720)))
+
+      const drawCurtainPanel = (yStart: number, height: number, isTop: boolean) => {
+        if (height <= 0) return
+        context.save()
+        context.beginPath()
+        context.rect(0, yStart, size.width, height)
+        context.clip()
+
+        // Pure black curtain / shutter
+        context.fillStyle = curtainColor
+        context.fillRect(0, yStart, size.width, height)
+
+        // Only draw pleats if a colored fabric is explicitly chosen
+        if (curtainColor !== '#000000' && curtainColor !== '#000') {
+          for (let x = 0; x < size.width; x += pleatWidth) {
+            const grad = context.createLinearGradient(x, 0, x + pleatWidth, 0)
+            grad.addColorStop(0, 'rgba(0, 0, 0, 0.45)')
+            grad.addColorStop(0.5, 'rgba(255, 255, 255, 0.16)')
+            grad.addColorStop(1, 'rgba(0, 0, 0, 0.48)')
+            context.fillStyle = grad
+            context.fillRect(x, yStart, pleatWidth, height)
+          }
+        }
+
+        // Shadow along parting hem
+        const edgeY = isTop ? yStart + height : yStart
+        const shadowDepth = Math.max(12, Math.round(28 * (size.height / 720)))
+        const shadowGrad = context.createLinearGradient(
+          0,
+          isTop ? edgeY - shadowDepth : edgeY,
+          0,
+          isTop ? edgeY : edgeY + shadowDepth,
+        )
+        if (isTop) {
+          shadowGrad.addColorStop(0, 'rgba(0, 0, 0, 0)')
+          shadowGrad.addColorStop(1, 'rgba(0, 0, 0, 0.85)')
+        } else {
+          shadowGrad.addColorStop(0, 'rgba(0, 0, 0, 0.85)')
+          shadowGrad.addColorStop(1, 'rgba(0, 0, 0, 0)')
+        }
+        context.fillStyle = shadowGrad
+        context.fillRect(0, isTop ? edgeY - shadowDepth : edgeY, size.width, shadowDepth)
+
+        // Trim border on opening edge if set
+        if (trimColor !== 'transparent' && trimColor !== 'none') {
+          context.fillStyle = trimColor
+          if (isTop) {
+            context.fillRect(0, edgeY - trimHeight, size.width, trimHeight)
+          } else {
+            context.fillRect(0, edgeY, size.width, trimHeight)
+          }
+        }
+
+        context.restore()
+      }
+
+      if (topEdge > 0) {
+        drawCurtainPanel(0, topEdge, true)
+      }
+      if (bottomEdge < size.height) {
+        drawCurtainPanel(bottomEdge, size.height - bottomEdge, false)
       }
       break
     }

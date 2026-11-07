@@ -110,6 +110,9 @@ function overlayAnimationStyle(
     ...(animation.reveal < 1
       ? { clipPath: `inset(0 ${(1 - animation.reveal) * 100}% 0 0)` }
       : null),
+    ...(animation.curtainsReveal !== undefined && animation.curtainsReveal < 1
+      ? { clipPath: `inset(${(1 - animation.curtainsReveal) * 50}% 0)` }
+      : null),
   }
 }
 
@@ -534,6 +537,71 @@ export function Preview({
                   const intensity = overlay.intensity ?? 1
                   const type = overlay.vfxType ?? 'letterbox'
                   const isSelected = overlay.id === selectedOverlayId
+
+                  if (type === 'curtains') {
+                    if (!isSelected && (time < overlay.start || time > overlay.start + overlay.duration)) {
+                      return null
+                    }
+                    const inPoint = overlay.inPoint ?? 0
+                    const totalSpan = Math.max(0.2, overlay.duration + inPoint)
+                    const localTime = Math.max(0, time - overlay.start) + inPoint
+                    const rawProgress = Math.min(1, Math.max(0, localTime / totalSpan))
+                    const openAmount = rawProgress
+                    const curtainColor = overlay.vfxCurtainColor ?? '#000000'
+                    const trimColor = overlay.vfxCurtainTrimColor ?? 'transparent'
+                    const panelHeightPct = (1 - openAmount) * 50
+                    if (panelHeightPct <= 0.05) return null
+
+                    const hasPleats = curtainColor !== '#000000' && curtainColor !== '#000'
+                    const hasBorder = trimColor !== 'transparent' && trimColor !== 'none'
+
+                    return (
+                      <div
+                        key={overlay.id}
+                        className={`preview-vfx-curtains${isSelected ? ' selected' : ''}`}
+                        style={{
+                          position: 'absolute',
+                          inset: 0,
+                          pointerEvents: 'none',
+                          zIndex: overlayZIndex.get(overlay.id) ?? 2,
+                          opacity: overlay.opacity ?? 1,
+                        }}
+                      >
+                        <div
+                          className="curtain-panel curtain-top"
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            width: '100%',
+                            height: `${panelHeightPct}%`,
+                            backgroundColor: curtainColor,
+                            backgroundImage: hasPleats
+                              ? `repeating-linear-gradient(90deg, rgba(0,0,0,0.45) 0px, rgba(255,255,255,0.14) 18px, rgba(0,0,0,0.48) 36px)`
+                              : undefined,
+                            borderBottom: hasBorder ? `3px solid ${trimColor}` : undefined,
+                            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.85)',
+                          }}
+                        />
+                        <div
+                          className="curtain-panel curtain-bottom"
+                          style={{
+                            position: 'absolute',
+                            bottom: 0,
+                            left: 0,
+                            width: '100%',
+                            height: `${panelHeightPct}%`,
+                            backgroundColor: curtainColor,
+                            backgroundImage: hasPleats
+                              ? `repeating-linear-gradient(90deg, rgba(0,0,0,0.45) 0px, rgba(255,255,255,0.14) 18px, rgba(0,0,0,0.48) 36px)`
+                              : undefined,
+                            borderTop: hasBorder ? `3px solid ${trimColor}` : undefined,
+                            boxShadow: '0 -8px 24px rgba(0, 0, 0, 0.85)',
+                          }}
+                        />
+                      </div>
+                    )
+                  }
 
                   if (type === 'letterbox') {
                     const ratioStr = overlay.vfxLetterboxRatio ?? '2.35'

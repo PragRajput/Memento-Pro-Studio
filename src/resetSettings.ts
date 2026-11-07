@@ -77,7 +77,7 @@ export function resetTextOverlay(item: TextOverlay): TextOverlay {
 /** An overlay: rebuilt from its category's defaults, keeping id, placement and source. */
 export function resetOverlayItem(item: OverlayItem): OverlayItem {
   const fresh = createDefaultOverlay(item.category, item.start, item.duration, item.clipId)
-  return { ...fresh, id: item.id }
+  return { ...fresh, id: item.id, inPoint: item.inPoint, speed: item.speed, baseDuration: item.baseDuration }
 }
 
 /** A transition: back to a plain crossfade at the default length, between the same two clips. */

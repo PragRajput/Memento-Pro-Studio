@@ -24,6 +24,8 @@ const LAYER_PROPERTIES: readonly AnimatableProperty[] = [
   'volume',
 ]
 
+const SPEED_PRESETS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4]
+
 interface VideoLayerInspectorProps {
   item: VideoLayerItem
   clip: MediaClip | undefined
@@ -61,6 +63,8 @@ export function VideoLayerInspector({
   const fitMode = item.fitMode ?? 'contain'
   const currentFilter = item.filter ?? 'none'
   const rotation = item.rotation ?? 0
+  const currentSpeed = item.speed ?? 1
+  const isPhoto = clip?.mediaType === 'image'
 
   return (
     <div className="inspector-panel clip-inspector-panel">
@@ -163,6 +167,28 @@ export function VideoLayerInspector({
               }
               onSeekTo={onSeekToLocalTime}
             />
+          </section>
+        )}
+
+        {/* Playback Speed */}
+        {!isPhoto && (
+          <section className="inspector-section">
+            <div className="section-header-row">
+              <span className="inspector-section-label">Playback Speed</span>
+              <span className="section-value-pill">{currentSpeed}x</span>
+            </div>
+            <div className="speed-pills-row">
+              {SPEED_PRESETS.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  className={`speed-pill-btn${currentSpeed === s ? ' active' : ''}`}
+                  onClick={() => onChange({ ...item, speed: s })}
+                >
+                  {s === 1 ? '1x' : `${s}x`}
+                </button>
+              ))}
+            </div>
           </section>
         )}
 

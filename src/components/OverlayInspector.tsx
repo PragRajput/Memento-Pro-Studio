@@ -1,4 +1,5 @@
 import {
+  DEFAULT_OVERLAY_ANIM_DURATION,
   LOWER_THIRD_PRESETS,
   VFX_OVERLAY_PRESETS,
 } from '../overlayDraw.ts'
@@ -39,6 +40,7 @@ const ANIMATION_KINDS: { id: OverlayAnimation; label: string }[] = [
   { id: 'slide-up', label: 'Slide Up' },
   { id: 'scale-pop', label: 'Pop (Scale)' },
   { id: 'wipe-right', label: 'Wipe' },
+  { id: 'curtains-open', label: 'Curtains (Center Up/Down)' },
 ]
 
 const LETTERBOX_RATIOS: { id: OverlayLetterboxRatio; label: string }[] = [
@@ -67,6 +69,8 @@ export function OverlayInspector({
   const currentCategory = item.category
   const opacity = Math.round((item.opacity ?? 1) * 100)
   const availableClips = Array.from(mediaClips.values())
+  const selectedClip = mediaClips.get(item.clipId ?? '')
+  const isPipVideo = selectedClip?.mediaType !== 'image'
 
   const handleCategoryChange = (category: OverlayCategory) => {
     if (category === item.category) return
@@ -414,6 +418,27 @@ export function OverlayInspector({
                 </div>
               )}
             </div>
+
+            {isPipVideo && (
+              <div className="inspector-group">
+                <div className="group-header-row">
+                  <span className="group-label">Playback Speed</span>
+                  <span className="group-value-badge">{item.pipSpeed ?? 1}x</span>
+                </div>
+                <div className="speed-pills-row" style={{ marginTop: '4px' }}>
+                  {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2].map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      className={`speed-pill-btn${(item.pipSpeed ?? 1) === s ? ' active' : ''}`}
+                      onClick={() => onChange({ ...item, pipSpeed: s })}
+                    >
+                      {s === 1 ? '1x' : `${s}x`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         )}
 
@@ -522,6 +547,128 @@ export function OverlayInspector({
                   onChange={(e) => onChange({ ...item, vfxBokehCount: parseInt(e.target.value, 10) })}
                 />
               </div>
+            )}
+
+            {item.vfxType === 'curtains' && (
+              <>
+                <div className="inspector-group">
+                  <div className="group-header-row">
+                    <span className="group-label">Curtain Color</span>
+                  </div>
+                  <div className="color-control-row">
+                    <input
+                      type="color"
+                      className="native-color-picker"
+                      value={item.vfxCurtainColor ?? '#000000'}
+                      onChange={(e) => onChange({ ...item, vfxCurtainColor: e.target.value })}
+                      title="Curtain Color"
+                    />
+                    <div className="swatch-list">
+                      {['#000000', '#111827', '#1f2937', '#0f172a', '#1e1b4b', '#4a0404'].map((swatch) => (
+                        <button
+                          key={swatch}
+                          type="button"
+                          className={`swatch-btn${(item.vfxCurtainColor ?? '#000000') === swatch ? ' active' : ''}`}
+                          style={{ backgroundColor: swatch }}
+                          onClick={() => onChange({ ...item, vfxCurtainColor: swatch })}
+                          aria-label={swatch}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="inspector-group">
+                  <div className="group-header-row">
+                    <span className="group-label">Edge Border Trim</span>
+                  </div>
+                  <div className="color-control-row">
+                    <input
+                      type="color"
+                      className="native-color-picker"
+                      value={item.vfxCurtainTrimColor && item.vfxCurtainTrimColor !== 'transparent' ? item.vfxCurtainTrimColor : '#000000'}
+                      onChange={(e) => onChange({ ...item, vfxCurtainTrimColor: e.target.value })}
+                      title="Border Trim Color"
+                    />
+                    <div className="swatch-list">
+                      {['transparent', '#374151', '#4b5563', '#d4af37', '#ffffff'].map((swatch) => (
+                        <button
+                          key={swatch}
+                          type="button"
+                          className={`swatch-btn${(item.vfxCurtainTrimColor ?? 'transparent') === swatch ? ' active' : ''}`}
+                          style={{
+                            backgroundColor: swatch === 'transparent' ? '#18181b' : swatch,
+                            border: swatch === 'transparent' ? '1px dashed #71717a' : undefined,
+                          }}
+                          onClick={() => onChange({ ...item, vfxCurtainTrimColor: swatch })}
+                          aria-label={swatch === 'transparent' ? 'No border (None)' : swatch}
+                          title={swatch === 'transparent' ? 'None (Clean Black)' : swatch}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="inspector-group">
+                  <div className="group-header-row">
+                    <span className="group-label">Curtain Speed</span>
+                    <span className="group-value-badge">{item.speed ?? 1}x</span>
+                  </div>
+                  <div className="speed-pills-row" style={{ marginBottom: '8px' }}>
+                    {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 2].map((s) => {
+                      const curSpeed = item.speed ?? 1
+                      const isAct = Math.abs(curSpeed - s) < 0.01
+                      return (
+                        <button
+                          key={s}
+                          type="button"
+                          className={`speed-pill-btn${isAct ? ' active' : ''}`}
+                          onClick={() => {
+                            const base = item.baseDuration ?? (item.duration * curSpeed)
+                            const newDuration = Math.max(0.2, base / s)
+                            onChange({
+                              ...item,
+                              speed: s,
+                              baseDuration: base,
+                              duration: newDuration,
+                            })
+                          }}
+                        >
+                          {s === 1 ? '1x' : `${s}x`}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                <div className="inspector-group">
+                  <div className="group-header-row">
+                    <span className="group-label">Timeline Bar Duration</span>
+                    <span className="group-value-badge">
+                      {(item.duration + (item.inPoint ?? 0)).toFixed(1)}s
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    className="inspector-slider"
+                    min={0.5}
+                    max={10.0}
+                    step={0.1}
+                    value={item.duration + (item.inPoint ?? 0)}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value)
+                      const inPt = item.inPoint ?? 0
+                      const newDur = Math.max(0.2, val - inPt)
+                      const curSpeed = item.speed ?? 1
+                      onChange({
+                        ...item,
+                        duration: newDur,
+                        baseDuration: (newDur + inPt) * curSpeed,
+                      })
+                    }}
+                  />
+                </div>
+              </>
             )}
           </>
         )}
@@ -764,6 +911,60 @@ export function OverlayInspector({
               </select>
             </div>
           </div>
+          {(item.overlayAnimIn !== 'none' || item.overlayAnimOut !== 'none') && (
+            <div style={{ marginTop: '10px' }}>
+              <div className="group-header-row">
+                <span className="control-sublabel">Animation Speed / Duration</span>
+                <span className="control-subvalue">
+                  {(item.overlayAnimInDuration ?? DEFAULT_OVERLAY_ANIM_DURATION).toFixed(1)}s
+                </span>
+              </div>
+              <div className="speed-pills-row" style={{ marginTop: '4px', marginBottom: '8px' }}>
+                {[
+                  { label: 'Snappy (0.2s)', val: 0.2 },
+                  { label: 'Fast (0.4s)', val: 0.4 },
+                  { label: 'Normal (0.7s)', val: 0.7 },
+                  { label: 'Slow (1.2s)', val: 1.2 },
+                ].map(({ label, val }) => {
+                  const cur = item.overlayAnimInDuration ?? DEFAULT_OVERLAY_ANIM_DURATION
+                  const isAct = Math.abs(cur - val) < 0.05
+                  return (
+                    <button
+                      key={val}
+                      type="button"
+                      className={`speed-pill-btn${isAct ? ' active' : ''}`}
+                      style={{ flex: '1 0 calc(50% - 4px)' }}
+                      onClick={() =>
+                        onChange({
+                          ...item,
+                          overlayAnimInDuration: val,
+                          overlayAnimOutDuration: val,
+                        })
+                      }
+                    >
+                      {label}
+                    </button>
+                  )
+                })}
+              </div>
+              <input
+                type="range"
+                className="inspector-slider"
+                min={0.1}
+                max={Math.max(0.5, Math.min(3, item.duration / 2))}
+                step={0.05}
+                value={item.overlayAnimInDuration ?? DEFAULT_OVERLAY_ANIM_DURATION}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value)
+                  onChange({
+                    ...item,
+                    overlayAnimInDuration: val,
+                    overlayAnimOutDuration: val,
+                  })
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
 

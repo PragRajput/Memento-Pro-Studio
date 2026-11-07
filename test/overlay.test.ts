@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
+  DEFAULT_OVERLAY_ANIM_DURATION,
   LOWER_THIRD_PRESETS,
   VFX_OVERLAY_PRESETS,
   activeOverlaysAt,
@@ -68,6 +69,7 @@ describe('Overlay System', () => {
     assert.ok(ids.includes('glitch'))
     assert.ok(ids.includes('scanlines'))
     assert.ok(ids.includes('bokeh'))
+    assert.ok(ids.includes('curtains'))
 
     for (const preset of VFX_OVERLAY_PRESETS) {
       assert.ok(preset.name.length > 0)
@@ -209,6 +211,16 @@ describe('Overlay entrance and exit', () => {
     assert.equal(overlayAnimationAt(item, 3).reveal, 1)
   })
 
+  it('animates opening curtains from center up and down', () => {
+    const item = overlay('a', 'vfx', { ...base, overlayAnimIn: 'curtains-open', overlayAnimInDuration: 1 })
+    const startState = overlayAnimationAt(item, 2)
+    assert.equal(startState.curtainsReveal, 0)
+    const midState = overlayAnimationAt(item, 2.5)
+    assert.ok((midState.curtainsReveal ?? 0) > 0 && (midState.curtainsReveal ?? 0) < 1)
+    const endState = overlayAnimationAt(item, 3)
+    assert.equal(endState.curtainsReveal, 1)
+  })
+
   it('clamps an animation to half the overlay so entrance and exit cannot overlap', () => {
     // A 1s overlay asking for a 10s entrance gets 0.5s.
     const item = overlay('a', 'color', {
@@ -248,14 +260,21 @@ describe('Overlay entrance and exit', () => {
   it('supports VFX letterbox ratio presets, vignette feather, and bokeh count', () => {
     const vfx = overlay('vfx-1', 'vfx', {
       ...base,
-      vfxType: 'letterbox',
+      vfxType: 'curtains',
       vfxLetterboxRatio: '2.39',
       vfxVignetteFeather: 65,
       vfxBokehCount: 40,
+      vfxCurtainColor: '#000000',
+      vfxCurtainTrimColor: 'transparent',
+      vfxCurtainOpenDuration: 1.5,
     })
+    assert.equal(vfx.vfxType, 'curtains')
     assert.equal(vfx.vfxLetterboxRatio, '2.39')
     assert.equal(vfx.vfxVignetteFeather, 65)
     assert.equal(vfx.vfxBokehCount, 40)
+    assert.equal(vfx.vfxCurtainColor, '#000000')
+    assert.equal(vfx.vfxCurtainTrimColor, 'transparent')
+    assert.equal(vfx.vfxCurtainOpenDuration, 1.5)
   })
 
   it('supports color wash shapes and scrim sizes', () => {
@@ -276,5 +295,53 @@ describe('Overlay entrance and exit', () => {
     })
     assert.equal(lt.lowerThirdScale, 1.25)
     assert.equal(lt.lowerThirdBackdropBlur, 16)
+  })
+
+  it('respects customizable animation speed and duration', () => {
+    assert.equal(DEFAULT_OVERLAY_ANIM_DURATION, 0.4)
+    const fastItem = overlay('anim-fast', 'media', {
+      start: 0,
+      duration: 5,
+      overlayAnimIn: 'fade',
+      overlayAnimInDuration: 0.2,
+      overlayAnimOut: 'fade',
+      overlayAnimOutDuration: 0.2,
+    })
+    // At t = 0.1 (halfway through 0.2s duration), opacity should be ~0.5
+    const animMid = overlayAnimationAt(fastItem, 0.1)
+    assert.ok(Math.abs(animMid.opacity - 0.5) < 0.05)
+    // At t = 0.25 (past 0.2s entrance), opacity should be 1
+    const animDone = overlayAnimationAt(fastItem, 0.25)
+    assert.equal(animDone.opacity, 1)
+  })
+
+  it('honours inPoint on overlay entrance animation when trimmed from beginning', () => {
+    const trimmedItem = overlay('anim-trimmed', 'media', {
+      start: 1.0,
+      duration: 4,
+      inPoint: 0.2,
+      overlayAnimIn: 'fade',
+      overlayAnimInDuration: 0.4,
+    })
+    // At t = 1.0 (start of trimmed bar), local = (1.0 - 1.0) + 0.2 = 0.2
+    // Halfway through 0.4s entrance duration, opacity should be ~0.5
+    const animStart = overlayAnimationAt(trimmedItem, 1.0)
+    assert.ok(Math.abs(animStart.opacity - 0.5) < 0.05)
+    // At t = 1.25, local = 0.25 + 0.2 = 0.45 >= 0.4, opacity should be 1
+    const animDone = overlayAnimationAt(trimmedItem, 1.25)
+    assert.equal(animDone.opacity, 1)
+  })
+
+  it('supports speed and baseDuration mapping for timeline bar width', () => {
+    const item = overlay('speed-test', 'vfx', {
+      ...base,
+      vfxType: 'curtains',
+      speed: 0.5,
+      baseDuration: 2.0,
+      duration: 4.0, // 2.0 / 0.5 = 4.0s
+    })
+    assert.equal(item.speed, 0.5)
+    assert.equal(item.baseDuration, 2.0)
+    assert.equal(item.duration, 4.0)
   })
 })
